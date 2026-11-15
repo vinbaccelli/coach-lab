@@ -2447,3 +2447,17 @@ So RTMPose adds about 160–190 MB resident here. It is never released while AI 
 **Same pattern elsewhere (not changed).** `app/analysis/page.tsx` generic URL embeds (`genericEmbedSrcA/B` frames) have no `credentialless` attribute either. They live in the protected analysis surface, so they were left alone; check whether they show the same blank frame for non-YouTube links before deciding.
 
 **Severity.** High (user-visible, every timeline video), fixed.
+
+## 081 — AI Track skeleton showed limbs crossed in an X (each knee/elbow joined to the opposite ankle/wrist)
+
+**Found:** 2026-11-14, iPhone screenshot of a generated AI Track video (player seen from behind, wide stance): the two shin lines cross between knee and ankle, about twice the length of the thighs. Reported as "humanly impossible".
+
+**Verified root cause (code + synthetic measurement; NOT yet confirmed on the real clip).** `lib/skeletonValidate.ts` repaired left/right swaps only against the PREVIOUS frame (step 1). A swap that is present from the first frame, or lasts the whole clip, never "jumps", so it was kept; the local bone-length check (step 4) compares each bone with its neighbours, which carry the same swap. This is the limitation already written in `docs/SKELETON_VALIDATION.md` ("first-frame L/R swap can't be detected"). Measured on synthetic tracks with ground truth: a whole-clip wrist/elbow swap stayed 90 → 90 swapped frames before the fix.
+
+**Fix.** New step 0 in `validateTrack`: inside each frame, a knee, ankle, elbow or wrist whose bone to its own hip/knee/shoulder/elbow is physically impossible (ankle/wrist: longer than 1.4 × the thigh/upper arm of the same frame; knee/elbow: longer than 1.35 × a rolling median of the clip's best-assignment length) and clearly shorter the other way round (< 0.7, saving ≥ 0.08 body heights) is swapped back. Needs no history. Measured: wrists/elbows/arms 90 → 0 swapped frames in every kind and frame rate; the reported wide-stance case is repaired exactly (labels only, nothing moved); genuine crossover steps and folded arms are untouched (0 repairs, the same as before). First version of the step used a clip-wide reference and wrongly "repaired" genuine crossings (90 and 40 frames); found by `tests/skeletonLimbs.test.ts` before anything shipped, and replaced by the same-frame ruler.
+
+**Limits (honest).** (1) Legs together or parallel and mirror-symmetric: a knee/ankle swap changes no bone length and no line crossing, so it is geometrically a valid skeleton and cannot be told apart without history; not repaired (and not visible as an X). (2) A crossed pose whose bone lengths stay plausible is indistinguishable from a genuine crossover step; left alone on purpose. (3) Real footage and the iPhone: not measured here. After the next AI Track with `?debug=1`, the panel line `bake: … swaps fixed N` should now be above 0 on the affected clip; `?legacy=1` runs the old path for comparison.
+
+**Fault assessment.** Mine to fix (skeleton validation, Stage 2a); the limitation was documented, not scheduled.
+
+**Severity.** High (visible and implausible skeleton on a common view: player seen from behind).

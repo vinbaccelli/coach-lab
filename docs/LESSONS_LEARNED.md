@@ -946,3 +946,10 @@ depend on what failed; "called play()" is not "it plays", so check the effect
 **Verified root cause.** `Cross-Origin-Embedder-Policy: credentialless` on every page blocks cross-origin frames in Chromium unless the frame has the `credentialless` attribute; the timeline frame was a plain `<iframe>`.
 **Fix.** Reuse `components/reports/VideoBlock.tsx` (marks the frame, always shows a "Watch on YouTube" link).
 **Class of mistake.** Writing a new embed instead of reusing the one that already encodes a platform constraint. Any new `<iframe>` in this app must go through `VideoBlock` (or set `credentialless`), and a browser check must load it against a stub without COEP headers: a blocked frame fires no error, so nothing else catches it.
+
+## 026 — A fixture that cannot show the bug, and a reference the bug itself biases
+
+**Symptom.** Tests written for the limb-swap fix (KNOWN_ISSUES 081) failed: the leg cases asked a length-based rule to detect a swap of mirror-symmetric legs (no length changes, valid skeleton), and a "genuine crossing" fixture did not cross anything.
+**Verified root cause.** (1) Wrote tests from the assumption that any swap is detectable, without measuring the corrupted data first (same class as LESSONS 024). (2) The first fix used a reference length from the clip's own best assignment; when limbs are genuinely crossed on every frame that reference is biased low and the correct pose looks "too long": 90 and 40 false repairs, caught only because a test with a genuine-crossing fixture existed.
+**Fix.** Measure the ratios first; use a ruler a swap cannot bias (the bone above, same frame); realistic wide-stance fixtures for the legs.
+**Class of mistake.** A detector validated only on the corruption it should catch, never on the genuine look-alike it must leave alone. Every "repair" rule needs a false-positive fixture written from the legitimate case.

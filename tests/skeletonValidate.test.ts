@@ -173,3 +173,148 @@ test('frame gate: a rotated (sideways) clip is not dropped wholesale by the vert
   }) as Seq;
   assert.equal(run(rotated, 60).report.droppedFrames, 0);
 });
+
+// ── A limb swap that lasts the whole clip (KNOWN_ISSUES 081) ─────────────────────────────────────────
+// The temporal swap repair compares a frame with the previous one, so a swap that is already there at
+// the first frame and never "jumps" was kept; the local bone-length check cannot see it either, because
+// the neighbours carry the same swap. Each knee/ankle and elbow/wrist must stay joined to its own
+// hip / shoulder chain: judged inside the frame, not against history.
+const ANKLES: Array<readonly [string, string]> = [['left_ankle', 'right_ankle']];
+const WRISTS: Array<readonly [string, string]> = [['left_wrist', 'right_wrist']];
+const ELBOWS: Array<readonly [string, string]> = [['left_elbow', 'right_elbow']];
+const allFrames = (s: Seq) => s.map((_, i) => i);
+
+test('a swap that lasts the WHOLE clip (from frame 0) is repaired: ankles, wrists, elbows, whole legs, whole arms', () => {
+  const cases: Array<[string, ReadonlyArray<readonly [string, string]>]> = [
+    ['ankles', ANKLES], ['wrists', WRISTS], ['elbows', ELBOWS],
+    ['legs', [['left_knee', 'right_knee'], ['left_ankle', 'right_ankle']]],
+    ['arms', [['left_elbow', 'right_elbow'], ['left_wrist', 'right_wrist']]],
+  ];
+  for (const fps of [60, 30]) for (const k of ['forehand', 'serve', 'lateral'] as const) for (const [name, pairs] of cases) {
+    const t = truth(k, fps);
+    const bad = injectSwaps(t, allFrames(t), pairs);
+    assert.ok(compareToTruth(bad, t).swapsVsTruth > 0, `${name} ${k}@${fps}: the corruption must be visible to the metric`);
+    const r = run(bad, fps);
+    assert.equal(compareToTruth(back(r), t).swapsVsTruth, 0, `${name} ${k}@${fps}`);
+  }
+});
+
+test('ankles swapped from the first frame to the last: the shin lines no longer cross (the reported X)', () => {
+  const t = truth('lateral');
+  const bad = injectSwaps(t, allFrames(t), ANKLES);
+  const fixed = back(run(bad, 60));
+  const cross = (p: Seq[number]) => {
+    if (!p) return false;
+    const seg = (a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }, d: { x: number; y: number }) => {
+      const o = (p1: typeof a, p2: typeof a, p3: typeof a) => (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
+      return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+    };
+    return seg(p.left_knee, p.left_ankle, p.right_knee, p.right_ankle);
+  };
+  assert.ok(bad.filter(cross).length > 20, 'the corrupted track shows crossing shins');
+  assert.equal(fixed.filter(cross).length, 0);
+});
+
+test('genuine crossing is left alone: a crossover step with correct bone lengths is not "repaired"', () => {
+  const t = truth('lateral');
+  const crossed = t.map((p) => {
+    if (!p) return p;
+    const q = JSON.parse(JSON.stringify(p)) as NonNullable<typeof p>;
+    // each shin rotated so the ankle passes the other leg's line, bone length kept (a real crossover step)
+    for (const [side, other] of [['left', 'right'], ['right', 'left']] as const) {
+      const kn = q[`${side}_knee`], an = q[`${side}_ankle`], ok = q[`${other}_knee`];
+      const len = Math.hypot(an.x - kn.x, an.y - kn.y);
+      const dir = Math.sign(ok.x - kn.x) || 1;
+      const a = Math.atan2(an.y - kn.y, an.x - kn.x), tilt = (dir * 18 * Math.PI) / 180;
+      const rotated = a + (Math.cos(a) * 0 + (Math.sin(a) >= 0 ? -tilt * dir * dir * -1 : tilt)) * 0 + tilt * (Math.sin(a) >= 0 ? -1 : 1) * -1;
+      an.x = kn.x + Math.cos(rotated) * len; an.y = kn.y + Math.sin(rotated) * len;
+    }
+    return q;
+  }) as Seq;
+  const r = run(crossed, 60);
+  assert.equal(r.report.swapsFixed, 0);
+  assert.deepEqual(back(r).map((p) => p && [p.left_ankle.x, p.left_ankle.y, p.right_ankle.x, p.right_ankle.y]), crossed.map((p) => p && [p.left_ankle.x, p.left_ankle.y, p.right_ankle.x, p.right_ankle.y]));
+});
+
+// ── Realistic geometry for the reported case (wide stance seen from behind, KNOWN_ISSUES 081) ───────────
+// The synthetic legs above are mirror-symmetric and parallel, so a knee/ankle swap there is not visible
+// in the geometry at all (the swapped skeleton is as valid as the true one). A wide stance is: ankles
+// far outside the knees, so a swapped ankle sends the shin across the body at about twice its length.
+// Proportions from the reported frame: hips 0.18, knees 0.5, ankles 0.75 body heights apart; thigh 0.29, shin 0.39.
+const wideStance = (t: Seq): Seq => t.map((p) => {
+  if (!p) return p;
+  const q = JSON.parse(JSON.stringify(p)) as NonNullable<typeof p>;
+  const BH = 600, cx = (p.left_hip.x + p.right_hip.x) / 2, hy = (p.left_hip.y + p.right_hip.y) / 2;
+  for (const [side, s] of [['left', -1], ['right', 1]] as const) {
+    q[`${side}_hip`].x = cx + s * 0.09 * BH; q[`${side}_hip`].y = hy;
+    q[`${side}_knee`].x = cx + s * 0.25 * BH; q[`${side}_knee`].y = hy + 0.27 * BH;
+    q[`${side}_ankle`].x = cx + s * 0.375 * BH; q[`${side}_ankle`].y = hy + 0.64 * BH;
+  }
+  return q;
+}) as Seq;
+const shinsCross = (p: Seq[number]) => {
+  if (!p) return false;
+  const o = (a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  const [a, b, c, d] = [p.left_knee, p.left_ankle, p.right_knee, p.right_ankle];
+  return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+};
+
+test('wide stance, ankles swapped for the WHOLE clip: shins cross before, never after, and every joint is back on its own leg', () => {
+  for (const fps of [60, 30]) {
+    const t = wideStance(truth('lateral', fps));
+    const bad = injectSwaps(t, allFrames(t), ANKLES);
+    assert.equal(t.filter(shinsCross).length, 0);
+    assert.equal(bad.filter(shinsCross).length, t.length, 'the corrupted clip shows the X on every frame');
+    const r = run(bad, fps);
+    const fixed = back(r);
+    assert.equal(fixed.filter(shinsCross).length, 0, `@${fps}`);
+    assert.equal(compareToTruth(fixed, t).swapsVsTruth, 0);
+    assert.equal(compareToTruth(fixed, t).meanError, 0, 'repaired exactly: nothing moved, only labels');
+    assert.equal(r.report.swapsFixed, t.length);
+  }
+});
+
+test('wide stance, a few frames swapped: repaired; clean wide stance is never touched', () => {
+  const t = wideStance(truth('lateral'));
+  const r1 = run(injectSwaps(t, [30, 31, 32, 60], ANKLES), 60);
+  assert.equal(compareToTruth(back(r1), t).swapsVsTruth, 0);
+  assert.ok(r1.report.swapsFixed >= 4);
+  const clean = run(t, 60);
+  assert.equal(clean.report.swapsFixed, 0);
+  assert.equal(compareToTruth(back(clean), t).meanError, 0);
+});
+
+test('genuine crossing is left alone (correct bone lengths): a crossover step and folded arms', () => {
+  const legs = wideStance(truth('lateral')).map((p) => {
+    if (!p) return p;
+    const q = JSON.parse(JSON.stringify(p)) as NonNullable<typeof p>;
+    // each shin swung across the body about its knee, bone length kept: a real crossover step
+    for (const [side, other] of [['left', 'right'], ['right', 'left']] as const) {
+      const kn = q[`${side}_knee`], an = q[`${side}_ankle`], target = q[`${other}_knee`].x;
+      const vx = an.x - kn.x, vy = an.y - kn.y, th = (50 * Math.PI) / 180;
+      const rot = (a: number) => ({ x: kn.x + vx * Math.cos(a) - vy * Math.sin(a), y: kn.y + vx * Math.sin(a) + vy * Math.cos(a) });
+      const best = [th, -th].map(rot).sort((m, n) => Math.abs(m.x - target) - Math.abs(n.x - target))[0];
+      an.x = best.x; an.y = best.y;
+    }
+    return q;
+  }) as Seq;
+  assert.ok(legs.filter(shinsCross).length > 0, 'the fixture really crosses the shins');
+  const rl = run(legs, 60);
+  assert.equal(rl.report.swapsFixed, 0);
+  assert.equal(compareToTruth(back(rl), legs).meanError, 0);
+
+  const folded = truth('forehand').map((p) => {
+    if (!p) return p;
+    const q = JSON.parse(JSON.stringify(p)) as NonNullable<typeof p>;
+    // each forearm points at the other elbow (arms folded on the chest), length kept
+    for (const [side, other] of [['left', 'right'], ['right', 'left']] as const) {
+      const el = q[`${side}_elbow`], wr = q[`${side}_wrist`], oe = q[`${other}_elbow`];
+      const len = Math.hypot(wr.x - el.x, wr.y - el.y), w = Math.hypot(oe.x - el.x, oe.y - el.y) || 1;
+      wr.x = el.x + ((oe.x - el.x) / w) * len; wr.y = el.y + ((oe.y - el.y) / w) * len;
+    }
+    return q;
+  }) as Seq;
+  const rf = run(folded, 60);
+  assert.equal(rf.report.swapsFixed, 0);
+  assert.equal(compareToTruth(back(rf), folded).meanError, 0);
+});
