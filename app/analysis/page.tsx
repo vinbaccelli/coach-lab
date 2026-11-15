@@ -81,6 +81,7 @@ import {
 import { makeSnapshot, sortSnapshots, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
 import { SKELETON_ANGLE_LABELS, hasAnyAngle, persistableRows } from '@/lib/skeletonAngles';
 import { isLegacySkeleton } from '@/lib/skeletonRefine';
+import { tagPresentedOn } from '@/lib/skeletonSwitches';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { percentFromStatus } from '@/lib/modelPrefetch';
 import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
@@ -1575,11 +1576,57 @@ function Home() {
         poseDbg.event(`AI Track: model files ready in ${Math.round(performance.now() - tDl)} ms`); // TEMP-DEBUG-POSE
         if (precisionAbortRef.current) return 0;
       }
-      await seekVideoTo(start);
+      // Exact-frame seek: set time → await 'seeked' → await one
+      // requestVideoFrameCallback so the seeked frame is actually PAINTED before
+      // we detect (kills stale-frame sampling on the fast-motion frames that
+      // matter most). 300 ms safety net + rVFC fallback for older browsers.
+      // Resolves with the PRESENTED frame's own time (rVFC metadata.mediaTime) when the browser reports
+      // it, else null (the 300 ms safety net fires first on most desktop samples). A sample is tagged
+      // with the time it ASKED for by default; `?tag=presented` tags it with the presented frame's time
+      // instead, an experiment for the phone: the two differ by up to a couple of frames (desktop: a
+      // few ms to 33 ms, sign varies), and a tag that is early/late makes the skeleton lead/lag its
+      // frame (KNOWN_ISSUES 076). The panel line `AI Track timing` reports the measured difference.
+      const seekTo = (t: number) => new Promise<number | null>((resolve) => {
+        const vv = videoRef.current;
+        if (!vv) { resolve(null); return; }
+        if (Math.abs(vv.currentTime - t) < 0.0005 && !vv.seeking) { resolve(null); return; }
+        let done = false;
+        const fin = (mediaTime?: number) => { if (!done) { done = true; vv.removeEventListener('seeked', onSeeked); resolve(typeof mediaTime === 'number' && Number.isFinite(mediaTime) ? mediaTime : null); } };
+        const rvfc = (vv as unknown as { requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime?: number }) => void) => number }).requestVideoFrameCallback;
+        const onSeeked = () => { if (rvfc) rvfc.call(vv, (_now, meta) => fin(meta?.mediaTime)); else fin(); };
+        vv.addEventListener('seeked', onSeeked, { once: true });
+        vv.currentTime = t;
+        window.setTimeout(() => fin(), 300);
+      });
+      const tagLegacy = isLegacySkeleton();
+      const tagPresented = tagPresentedOn() && !tagLegacy;
+      let noFrameTime = 0;
+      /** Time to tag a sample with, and the offset (presented − asked, ms) kept for the panel summary. */
+      const offsetsMs: number[] = [];
+      const tagFor = (presented: number | null, asked: number): number => {
+        if (presented == null) { noFrameTime++; return asked; }
+        offsetsMs.push((presented - asked) * 1000);
+        return tagPresented ? presented : asked;
+      };
+      const logTiming = () => {
+        if (!offsetsMs.length) { poseDbg.event(`AI Track timing: the browser gave no presented-frame time (${noFrameTime} samples)`); return; } // TEMP-DEBUG-POSE
+        const mean = offsetsMs.reduce((a, x) => a + x, 0) / offsetsMs.length;
+        const max = offsetsMs.reduce((a, x) => Math.max(a, Math.abs(x)), 0);
+        poseDbg.event(`AI Track timing: presented frame vs asked time · mean ${mean >= 0 ? '+' : ''}${mean.toFixed(1)} ms · max ${max.toFixed(1)} ms over ${offsetsMs.length} samples (${noFrameTime} without a frame time) · tagged with ${tagPresented ? 'the presented frame time (?tag=presented)' : 'the asked time'}`); // TEMP-DEBUG-POSE
+      };
+
+      // The FIRST seek of the pass is the longest (the playhead is wherever the coach left it) and
+      // the probe taken right after it is the track's first sample AND the seed of the crop tracker.
+      // It used to wait only for 'seeked', not for the painted frame like every other sample (the
+      // iPhone panel shows "seek: frame not ready (rs=4, not painted)"), so it could be detected on
+      // the previous frame. Same paint wait as the loop now; `?legacy=1` keeps the old wait (KNOWN_ISSUES 076).
+      let startPresented: number | null = null;
+      if (tagLegacy) await seekVideoTo(start); else startPresented = await seekTo(start);
       // Probe once: cold model init + first inference. Decides the engine for
       // the whole pass so MoveNet and MediaPipe coords never mix in one track.
       const probe = await mp.detectPosePrecise(v, params).catch(() => null);
       const useMediaPipe = !!probe;
+      poseDbg.event(`AI Track first sample: asked ${start.toFixed(3)} s · video at ${v.currentTime.toFixed(3)} s · readyState ${v.readyState}${isLegacySkeleton() ? ' · legacy wait (no paint wait)' : ''}`); // TEMP-DEBUG-POSE
       poseDbg.event(`AI Track: model ready in ${Math.round(performance.now() - tModel)} ms (${probe ? 'MediaPipe' : 'MoveNet fallback'}, ${params.model}, ${params.fps} fps)`); // TEMP-DEBUG-POSE
       // LOCKED PLAYER (lib/aiTrackLock.ts). No lock, or AI_TRACK_USE_LOCK off →
       // `lock` is null and everything below runs exactly as before.
@@ -1594,25 +1641,8 @@ function Home() {
       }
       if (!lock) {
         canvasRef.current?.startBakeCapture?.(!useMediaPipe);
-        if (probe) canvasRef.current?.addBakeSample?.(v.currentTime, probe);
+        if (probe) canvasRef.current?.addBakeSample?.(tagFor(startPresented, v.currentTime), probe);
       }
-
-      // Exact-frame seek: set time → await 'seeked' → await one
-      // requestVideoFrameCallback so the seeked frame is actually PAINTED before
-      // we detect (kills stale-frame sampling on the fast-motion frames that
-      // matter most). 300 ms safety net + rVFC fallback for older browsers.
-      const seekTo = (t: number) => new Promise<void>((resolve) => {
-        const vv = videoRef.current;
-        if (!vv) { resolve(); return; }
-        if (Math.abs(vv.currentTime - t) < 0.0005 && !vv.seeking) { resolve(); return; }
-        let done = false;
-        const fin = () => { if (!done) { done = true; vv.removeEventListener('seeked', onSeeked); resolve(); } };
-        const rvfc = (vv as unknown as { requestVideoFrameCallback?: (cb: () => void) => number }).requestVideoFrameCallback;
-        const onSeeked = () => { if (rvfc) rvfc.call(vv, () => fin()); else fin(); };
-        vv.addEventListener('seeked', onSeeked, { once: true });
-        vv.currentTime = t;
-        window.setTimeout(fin, 300);
-      });
 
       if (lock) {
         // Start AT the lock frame, find the locked player there (or stop), then
@@ -1629,7 +1659,7 @@ function Home() {
           mp.detectLockedPose(v, params, MAX_TRACK_POSES, pick).catch(() => ({ pose: null, candidates: 0, available: true }));
         canvasRef.current?.startBakeCapture?.(false);
         setProcessingStatus('AI Track: finding your locked player…');
-        await seekTo(lock.t);
+        const lockPresented = await seekTo(lock.t);
         const lockFrameT = v.currentTime;
         // Everyone else on the lock frame is a known "other" from the start.
         let seedOthers: NonNullable<ReturnType<typeof poseBox>>[] = [];
@@ -1647,7 +1677,7 @@ function Home() {
             : 'AI Track stopped: the multi-person tracking model could not be loaded, so your locked player cannot be followed. Try again.';
           return 0;
         }
-        if (inSection(lockFrameT, start, end)) canvasRef.current?.addBakeSample?.(lockFrameT, first.pose);
+        if (inSection(lockFrameT, start, end)) canvasRef.current?.addBakeSample?.(tagFor(lockPresented, lockFrameT), first.pose);
         canvasRef.current?.setAiTrackFollow?.({ box: seedBox, label });
         // Crop tracking for a SMALL locked player (lib/skeletonCrop.ts): try a crop around the
         // followed box first; the crop pose must still pass followStep (so it continues the
@@ -1661,7 +1691,7 @@ function Home() {
           let inGap = false;
           for (const t of times) {
             if (precisionAbortRef.current) return;
-            await seekTo(t);
+            const presented = await seekTo(t);
             const ft = v.currentTime;
             let next = st;
             let cropPose: Awaited<ReturnType<typeof mp.detectCropOnly>> = null;
@@ -1684,7 +1714,7 @@ function Home() {
               st = next;
               inGap = false;
               canvasRef.current?.setAiTrackFollow?.({ box: st.box, label });
-              if (inSection(ft, start, end)) canvasRef.current?.addBakeSample?.(ft, r.pose);
+              if (inSection(ft, start, end)) canvasRef.current?.addBakeSample?.(tagFor(presented, ft), r.pose);
             } else if (!inGap) {
               inGap = true;
               gaps++;
@@ -1705,6 +1735,7 @@ function Home() {
           canvasRef.current?.discardBakeCapture?.();
           return 0;
         }
+        logTiming();
         const kept = canvasRef.current?.finishBakeCapture?.(
           { start, end },
           { splitGapSec: Math.max(TRACK_GAP_SPLIT_SEC, 2.5 * step), locked: true },
@@ -1731,10 +1762,10 @@ function Home() {
       for (let k = 1; k <= total; k++) {
         if (precisionAbortRef.current) break;
         const t = Math.min(end, start + k * step);
-        await seekTo(t);
+        const presented = await seekTo(t);
         if (useMediaPipe) {
           const kps = await (cropTracker ? mp.detectPosePreciseTracked(v, params, cropTracker) : mp.detectPosePrecise(v, params)).catch(() => null);
-          if (kps) canvasRef.current?.addBakeSample?.(v.currentTime, kps);
+          if (kps) canvasRef.current?.addBakeSample?.(tagFor(presented, v.currentTime), kps);
         } else {
           // MoveNet fallback: the paused-frame 'seeked' detection (Canvas pose
           // scheduler) feeds the bake via the bridge hook — give it one beat.
@@ -1750,6 +1781,7 @@ function Home() {
         canvasRef.current?.discardBakeCapture?.();
         return 0;
       }
+      logTiming();
       const kept = canvasRef.current?.finishBakeCapture?.({ start, end }) ?? 0;
       if (cropTracker && process.env.NODE_ENV !== 'production') {
         console.log(`[PrecisionTrack] crop tracking: ${cropTracker.cropFrames} crop / ${cropTracker.fullFrames} full-frame / ${cropTracker.reacquires} re-acquires`);
@@ -1863,7 +1895,7 @@ function Home() {
     const v = videoRef.current;
     const sec = selectedSection(metricsSectionStart, metricsSectionEnd, v && isFinite(v.duration) ? v.duration : 0);
     firstFrameLog('analysis', `AI Track asked: ${scope === 'section' && sec ? `section ${sec.start.toFixed(3)}–${sec.end.toFixed(3)} s` : 'whole video'} (${quality}; timeline section ${metricsSectionStart?.toFixed(3) ?? '—'}–${metricsSectionEnd?.toFixed(3) ?? '—'})`);
-    const stop = v ? watchPassFrames(v, (line) => firstFrameLog('analysis', line)) : () => {};
+    const stop = v ? watchPassFrames(v, (line) => firstFrameLog('analysis', line), 10, undefined, 6) : () => {};
     void handlePrecisionTrack(scope, quality).finally(stop);
   }, [handlePrecisionTrack, metricsSectionStart, metricsSectionEnd]);
 

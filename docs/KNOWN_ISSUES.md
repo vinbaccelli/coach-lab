@@ -2379,6 +2379,15 @@ column are still never exported.
 
 **Decision (architect):** after V1.
 
+**Update 2026-11-15 — reported again (coach, iPhone screenshot of a generated video: "the skeleton always slowly joins the player"). Two code findings and one change.**
+
+1. *Sample time tag ≠ frame time (measured, desktop).* The AI Track pass tagged every baked sample with the time it ASKED for (`video.currentTime` after the seek), not with the time of the frame the browser actually presented. `?vdebug=1` frame log, Chromium, VP9 clip, 30 fps sampling: presented `mediaTime` − asked time = −33 … +33 ms, mean about +14 ms (the presented frame is usually LATER), so the skeleton shows the pose of a slightly later frame: it leads the player, which is the symptom in this entry. Playback (`lookupBakedPose(video.currentTime)`) and Generate (`lookupBakedPose(mediaTime)`) read the track by time, so the tag is the only thing that sets the alignment.
+2. *The first sample skipped the paint wait.* Every other sample waits for the painted frame (`seekTo`: `seeked` + one `requestVideoFrameCallback`; the iPhone panel shows `seek: frame not ready (rs=4, not painted)`), but the first one (the probe, which also seeds the crop tracker) waited only for `seeked`, after the longest seek of the pass.
+
+**Change (`app/analysis/page.tsx`, `lib/analysisFrameLog.ts`, `lib/skeletonSwitches.ts`).** The first seek now has the same paint wait; samples are still tagged with the asked time by default; the new link switch `?tag=presented` tags them with the presented frame's own time (`mediaTime`, asked time where the browser gives none) for a phone experiment. `?legacy=1` keeps the old first-seek wait. Debug only (`?debug=1` panel): `AI Track first sample: asked … · video at … · readyState …` and `AI Track timing: presented frame vs asked time · mean … ms · max … ms over N samples`; the `?vdebug=1` log of the AI Track pass now also records its first 6 seeks (new optional parameter, the default keeps "every 10th").
+
+**Not proven.** The measured offset is small on desktop (a fraction of a frame; and the browser gave a presented-frame time for only 35 of 181 samples, the rest hit the existing 300 ms fallback); whether it is the whole "slowly joins" effect on the iPhone is unknown. The `AI Track timing` line on the phone answers it: if mean/max there are tens of ms (and most samples have a frame time), run the same clip with `?tag=presented` and compare; if they are ~0, tagging was not the cause and the next suspect is the one still open (edge behaviour of the centred smoothing at the start of a track, and the crop tracker's first box). A/B on the phone: the same clip with `&legacy=1` and without (legacy also turns off the other skeleton changes).
+
 **Severity.** Medium (visual accuracy at the start of a track).
 
 ---
