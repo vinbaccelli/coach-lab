@@ -23,6 +23,7 @@ import { ERASER_SIZE_DEFAULT } from '@/lib/eraser';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 import { playWithSound, routeFor } from '@/lib/videoSound';
+import { iosDeviceNow, cameraConstraints } from '@/lib/iosSystemMic';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
 import { useRecording, RECORDING_AUDIO_CONSTRAINTS, FLOATING_CAMERA_WINDOW } from '@/contexts/RecordingContext';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
@@ -5343,17 +5344,17 @@ function Home() {
 
   const startWebcam = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: RECORDING_AUDIO_CONSTRAINTS,
-      });
+      // iOS: video only. The page opening the mic takes it from the iPhone's own Screen Recording
+      // (silent voice, "asset writer failing to save").
+      const ios = iosDeviceNow();
+      const stream = await navigator.mediaDevices.getUserMedia(cameraConstraints(ios, RECORDING_AUDIO_CONSTRAINTS));
       webcamStreamRef.current = stream;
       if (webcamVideoRef.current) {
         webcamVideoRef.current.srcObject = stream;
         await webcamVideoRef.current.play().catch(() => {});
       }
       setWebcamActive(true);
-      setMicActive(true);
+      setMicActive(stream.getAudioTracks().length > 0);
       setMicMuted(false);
       stream.getAudioTracks().forEach((t) => {
         t.enabled = true;
@@ -5391,6 +5392,10 @@ function Home() {
   }, [webcamActive, startWebcam, stopWebcam]);
 
   const startMic = useCallback(async () => {
+    if (iosDeviceNow()) {
+      setProcessingStatus("On iPhone the page does not open the microphone: use the iPhone Screen Recording's mic (long-press the record button in Control Center).");
+      return;
+    }
     try {
       // Recording constraints, not the browser's call-tuned defaults — this is the
       // track startRecording prefers above every other source.
