@@ -714,7 +714,7 @@ export function liveColumnRows(own: readonly ColumnRow[], pose: readonly Kp[] | 
 }
 
 /** Rows for a snapshot hold: its stored column as it was saved. */
-export function holdColumnRows(column: ReadonlyArray<{ label: string; value: number; unit: string }> | null | undefined): ColumnRow[] {
+export function holdColumnRows(column: ReadonlyArray<{ label: string; value: number | null; unit: string }> | null | undefined): ColumnRow[] {
   return (column ?? []).map((r) => ({ label: r.label, value: finiteOrNull(r.value), unit: r.unit ?? '' }));
 }
 

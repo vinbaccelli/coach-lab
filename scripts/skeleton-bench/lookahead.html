@@ -1,0 +1,20 @@
+<!doctype html><meta charset=utf-8><video id=main src=/clip.webm muted playsinline loop></video>
+<script type=module>
+import { LookAheadVideo, leadSeconds } from '/lookAheadPose.mjs'; // the REAL lib/lookAheadPose.ts, bundled by server.js
+window.READY = true;
+window.run = async (cfg) => {
+  const main = document.getElementById('main');
+  await new Promise(r => main.readyState >= 3 ? r() : main.addEventListener('canplay', r, { once: true }));
+  main.playbackRate = cfg.rate; main.currentTime = cfg.start || 1; await main.play();
+  const ahead = new LookAheadVideo(); const t0 = performance.now(); ahead.start(main);
+  const lead = leadSeconds(cfg.rtt, cfg.rate); const errs = []; let readyAt = null;
+  await new Promise(res => { const tick = () => {
+    ahead.sync(main, lead);
+    if (ahead.ready && readyAt === null) readyAt = performance.now() - t0;
+    if (ahead.ready) errs.push({ t: performance.now() - t0, err: (ahead.video.currentTime - main.currentTime - lead) * 1000 });
+    if (performance.now() - t0 > cfg.ms) res(); else setTimeout(tick, 33); }; tick(); });
+  const out = { errs, failed: ahead.failed, failReason: ahead.failReason, readyAtMs: readyAt, leadMs: lead * 1000, W: main.videoWidth, H: main.videoHeight };
+  window.__ahead = ahead; window.__main = main; return out;
+};
+window.release = () => { window.__ahead?.destroy(); window.__ahead = null; };
+</script>

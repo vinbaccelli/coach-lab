@@ -61,7 +61,7 @@ export type ExportSnapshot = {
   /** Its frozen pose (video px), or null. */
   skeleton: Array<{ x: number; y: number; score: number; name: string }> | null;
   /** Its own data column rows and its name (the column's title during its hold). */
-  column?: Array<{ label: string; value: number; unit: string }>;
+  column?: Array<{ label: string; value: number | null; unit: string }>;
   label?: string;
 };
 
@@ -79,7 +79,7 @@ export interface MetricsExportPanelProps {
   /** Read once at export start: each snapshot's strokes, box and frozen pose. */
   getSnapshotsForExport?: () => ExportSnapshot[];
   /** Read once at export start: the coach's own live data column rows (no skeleton angles) and its title. */
-  getLiveColumnForExport?: () => { rows: Array<{ label: string; value: number; unit: string }>; title: string };
+  getLiveColumnForExport?: () => { rows: Array<{ label: string; value: number | null; unit: string }>; title: string };
   /** Runs the existing snapshot Generate flow (handleGenerateSnapshots). */
   onSnapshotReport: () => void;
   /** The timeline's current playback rate: the export's default speed (nearest of 1×, 0.5×, 0.25×, 0.1×). */
