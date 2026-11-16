@@ -62,6 +62,8 @@ import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
 import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
 import { useSessionDraft } from '@/hooks/useSessionDraft';
+import { defaultMeasurementName, plusAction, type LastMeasurement } from '@/lib/columnPrompt';
+import { footLineChecked, posesHaveFeet, sampleTimes } from '@/lib/aiTrackFootLines';
 import PrecisionTrackDialog from '@/components/PrecisionTrackDialog';
 import { poseScribble } from '@/lib/mediapipeSegmenter';
 import type { StroAutoFrameSpec } from '@/hooks/useStroMotion';
@@ -69,13 +71,18 @@ import type { TrackQuality } from '@/lib/mediapipePose';
 import {
   computeGhostSampleTimes,
   resizeSampleTimes,
-  enforceMonotonicSampleTimes,
+  clampSampleTimes,
+  moveSampleTime,
   setStroMotionPreviewHash,
   normalizeObjectBox,
   normalizeSubjectBox,
   subjectBoxFromRegion,
 } from '@/lib/stroMotion';
 import { makeSnapshot, sortSnapshots, toPhaseMarkers, type Snapshot } from '@/lib/snapshots';
+import { SKELETON_ANGLE_LABELS, hasAnyAngle, persistableRows } from '@/lib/skeletonAngles';
+import { isLegacySkeleton } from '@/lib/skeletonRefine';
+import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
+import { percentFromStatus } from '@/lib/modelPrefetch';
 import { makeMediaAsset, type MediaAsset } from '@/lib/media/mediaAsset';
 import {
   allFramesReady,
@@ -196,6 +203,7 @@ import {
 import { getTabCaptureStream, stopAllTracks } from '@/lib/tabCaptureRecording';
 import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
 import { videoFileExtForBlob } from '@/lib/recordingUtils';
+import { saveImageFromUrl } from '@/lib/saveImage';
 const SaveReportModal = React.lazy(() => import('@/components/shared/SaveReportModal'));
 import AuthButton from '@/components/AuthButton';
 import { localDateTimeForFolder } from '@/lib/players/formatFolderLabel';
@@ -209,7 +217,17 @@ import { skeletonFramesToSamples } from '@/lib/biomechanics/poseSampling';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { useEntitlement } from '@/lib/useEntitlement';
 import type { Feature } from '@/lib/entitlements';
+import { autoRacketEnabled, setAutoRacketPreference } from '@/lib/stroMotionDraft/autoRacketFlags';
+import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled, isPhoneBudgetActive, markAutoDetectFinished, markAutoDetectStarted } from '@/lib/stroMotionDraft/phoneBudget';
+import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/restartBreadcrumb';
+import { racketWorkerEnabled } from '@/lib/stroMotionDraft/racketWorkerClient';
+import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
+import { SHRINK_TIER_KEY, lowerTier, parseTier, shrinkTarget, tierLabel, DEFAULT_PHONE_TIER } from '@/lib/phoneShrink/tier';
+import { probeVideo, shrinkVideoFile, type ShrinkHandle } from '@/lib/phoneShrink/shrink';
+
+const PREPARING_MOTION_LAYER_TEXT = 'Preparing Motion Layer…';
+
 
 /**
  * Has the once-per-page-load reload reset already been evaluated?
@@ -589,6 +607,8 @@ function Home() {
   // explicit off→on IS a real change event and engages MediaPipe cleanly (fires
   // the popup, warms the landmarker) exactly as intended.
   const [skeletonShowFootLine, setSkeletonShowFootLine] = useState(false);
+  /** AI Track's own DRAW-ONLY foot-line flag (lib/aiTrackFootLines.ts). Never read by the live-engine selection in Canvas, so it cannot move Live Skeleton off RTMPose-t. */
+  const [aiTrackFootLines, setAiTrackFootLines] = useState(false);
   const [skeletonClassicColors, setSkeletonClassicColors] = useState(true);
   const [skeletonShowRightArm, setSkeletonShowRightArm] = useState(true);
   const [skeletonShowLeftArm, setSkeletonShowLeftArm] = useState(true);
@@ -938,7 +958,7 @@ function Home() {
       // placed sample balls, just clamp any that fell outside the new
       // [start,end] instead of wiping every position (the "snapshots move from
       // their position" bug).
-      return enforceMonotonicSampleTimes(prev, stroStartFrame, stroEndFrame);
+      return clampSampleTimes(prev, stroStartFrame, stroEndFrame);
     });
   }, [stroStartFrame, stroEndFrame, stroFrameCount]);
 
@@ -964,7 +984,7 @@ function Home() {
 
   // ── Snapshot model: single source of truth for Metrics analysis ──────────
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number; unit: string; type: string }>>([]);
+  const [measurementColumn, setMeasurementColumn] = useState<Array<{ id: string; label: string; value: number | null; unit: string; type: string }>>([]);
   const measurementColumnRef = useRef(measurementColumn);
   measurementColumnRef.current = measurementColumn;
   const [biomechSelectedPhaseId, setBiomechSelectedPhaseId] = useState<string | null>(null);
@@ -1059,6 +1079,16 @@ function Home() {
   const skeletonLockedRef = useRef(false);
   useEffect(() => { skeletonLockedRef.current = skeletonLocked; }, [skeletonLocked]);
   const [pendingMeasurement, setPendingMeasurement] = useState<{ type: string; value: number; unit: string } | null>(null);
+  /** The last measurement a drawing produced, waiting for the column's "+" (lib/columnPrompt.ts). No modal opens by itself. */
+  const [lastMeasurement, setLastMeasurement] = useState<LastMeasurement | null>(null);
+  /** The column's "+": with a drawing waiting, ask whether to add it (the existing naming prompt); else false (manual note). */
+  const askAboutLastDrawing = (): boolean => {
+    if (plusAction(lastMeasurement) !== 'ask-last-drawing' || !lastMeasurement) return false;
+    setPendingMeasurement(lastMeasurement);
+    setPendingMeasurementName(defaultMeasurementName(lastMeasurement.type));
+    setLastMeasurement(null);
+    return true;
+  };
   /**
    * ANGLE DIFFERENTIAL — the two-arrow measuring flow.
    *
@@ -1176,7 +1206,7 @@ function Home() {
     const col = measurementColumnRef.current;
     setSnapshots(prev => prev.map(s => s.id === id ? {
       ...s,
-      column: col.filter(m => m.type !== 'skeleton-angle'),
+      column: persistableRows(col),
       overlaysOn: showMeasurementOverlaysStateRef.current,
       overlayAdjustments,
       drawingsJson,
@@ -1249,7 +1279,7 @@ function Home() {
     const drawingsJson = canvasRef.current?.exportStrokes?.() ?? '';
     const overlayAdjustments = canvasRef.current?.getOverlayAdjustments?.() ?? {};
     const skeleton = canvasRef.current?.getSkeletonKeypoints?.() ?? undefined;
-    const liveColumn = scrubRetiredLabels(measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'));
+    const liveColumn = scrubRetiredLabels(persistableRows(measurementColumnRef.current));
     const overlay = canvasRef.current?.getCanvas?.();
     let screenshot: string | undefined;
     if (overlay) { try { screenshot = captureFrame(v, overlay, canvasRef.current?.getVideoBounds?.()); } catch { screenshot = undefined; } }
@@ -1530,13 +1560,27 @@ function Home() {
     try {
       v.pause();
       setProcessingStatus('Loading precision tracking model…');
+      const tModel = performance.now(); // TEMP-DEBUG-POSE
       const mp = await import('@/lib/mediapipePose');
       const params = mp.TRACK_QUALITY[quality];
+      // Cold start: a REAL byte-level progress for the model files (silent when they are already cached).
+      {
+        const { prefetchWithProgress, formatProgress } = await import('@/lib/modelPrefetch');
+        const tDl = performance.now();
+        await prefetchWithProgress(mp.trackAssetUrls(params.model), (pr) => {
+          const slow = performance.now() - tDl > 400;
+          if (slow && pr.pct < 100) setProcessingStatus(`Downloading AI model… ${formatProgress(pr)}`);
+          else if (slow) setProcessingStatus('Starting the AI engine…');
+        }).catch(() => undefined);
+        poseDbg.event(`AI Track: model files ready in ${Math.round(performance.now() - tDl)} ms`); // TEMP-DEBUG-POSE
+        if (precisionAbortRef.current) return 0;
+      }
       await seekVideoTo(start);
       // Probe once: cold model init + first inference. Decides the engine for
       // the whole pass so MoveNet and MediaPipe coords never mix in one track.
       const probe = await mp.detectPosePrecise(v, params).catch(() => null);
       const useMediaPipe = !!probe;
+      poseDbg.event(`AI Track: model ready in ${Math.round(performance.now() - tModel)} ms (${probe ? 'MediaPipe' : 'MoveNet fallback'}, ${params.model}, ${params.fps} fps)`); // TEMP-DEBUG-POSE
       // LOCKED PLAYER (lib/aiTrackLock.ts). No lock, or AI_TRACK_USE_LOCK off →
       // `lock` is null and everything below runs exactly as before.
       passFinalRef.current = null;
@@ -1605,19 +1649,37 @@ function Home() {
         }
         if (inSection(lockFrameT, start, end)) canvasRef.current?.addBakeSample?.(lockFrameT, first.pose);
         canvasRef.current?.setAiTrackFollow?.({ box: seedBox, label });
+        // Crop tracking for a SMALL locked player (lib/skeletonCrop.ts): try a crop around the
+        // followed box first; the crop pose must still pass followStep (so it continues the
+        // locked player and not a known other), else this frame uses the unchanged full-frame
+        // multi-person detection below. Legacy switch ⇒ previous behaviour exactly.
+        const cropOn = !isLegacySkeleton();
+        let cropFrames = 0, cropMisses = 0;
         const walk = async (times: number[]) => {
           let st: FollowState = startFollow(seedBox, lockFrameT, seedOthers);
+          const tracker = cropOn ? mp.newCropTracker(seedBox) : null;
           let inGap = false;
           for (const t of times) {
             if (precisionAbortRef.current) return;
             await seekTo(t);
             const ft = v.currentTime;
             let next = st;
-            const r = await detectLocked((c) => {
-              const f = followStep(st, c, ft);
-              next = f.state;
-              return f.index;
-            });
+            let cropPose: Awaited<ReturnType<typeof mp.detectCropOnly>> = null;
+            if (tracker) {
+              cropPose = await mp.detectCropOnly(v, params, tracker).catch(() => null);
+              if (cropPose) {
+                const f = followStep(st, [cropPose], ft);
+                if (f.index === 0) { next = f.state; cropFrames++; } else { cropPose = null; cropMisses++; }
+              }
+            }
+            const r = cropPose
+              ? { pose: cropPose, candidates: 1, available: true }
+              : await detectLocked((c) => {
+                const f = followStep(st, c, ft);
+                next = f.state;
+                return f.index;
+              });
+            if (r.pose && tracker && !cropPose) tracker.box = poseBox(r.pose) ?? tracker.box;
             if (r.pose) {
               st = next;
               inGap = false;
@@ -1628,6 +1690,7 @@ function Home() {
               gaps++;
             }
             done++;
+            if (done % 10 === 0) poseDbg.event(`AI Track ${done}/${total} · ${Math.round((performance.now() - passT0) / done)} ms/frame`); // TEMP-DEBUG-POSE
             if (done % 3 === 0 || done === total - 1) {
               setProcessingStatus(`AI-tracking your locked player… ${Math.round(((done + 1) / total) * 100)}% (${params.speedLabel} · real feet)`);
             }
@@ -1636,6 +1699,8 @@ function Home() {
         await walk(forward);
         await walk(backward);
         canvasRef.current?.setAiTrackFollow?.(null);
+        if (cropOn && process.env.NODE_ENV !== 'production') console.log(`[PrecisionTrack] locked crop tracking: ${cropFrames} crop frames, ${cropMisses} rejected by the identity check`);
+        if (cropOn) poseDbg.event(`locked crop: ${cropFrames} crop frames · ${total - cropFrames} full-frame/gap · ${cropMisses} identity-rejected`); // TEMP-DEBUG-POSE
         if (precisionAbortRef.current) {
           canvasRef.current?.discardBakeCapture?.();
           return 0;
@@ -1657,18 +1722,25 @@ function Home() {
       const step = 1 / params.fps;
       const total = Math.max(1, Math.ceil((end - start) / step));
       const passT0 = performance.now();
+      // Crop tracking for SMALL players (lib/skeletonCrop.ts); large players and the
+      // legacy switch keep the exact previous full-frame call. Seeded from the first
+      // detection, else from the skeleton on screen (a far player the full frame misses).
+      const cropTracker = useMediaPipe && !isLegacySkeleton()
+        ? mp.newCropTracker(poseBox(probe) ?? poseBox(canvasRef.current?.getSkeletonKeypoints?.() ?? null))
+        : null;
       for (let k = 1; k <= total; k++) {
         if (precisionAbortRef.current) break;
         const t = Math.min(end, start + k * step);
         await seekTo(t);
         if (useMediaPipe) {
-          const kps = await mp.detectPosePrecise(v, params).catch(() => null);
+          const kps = await (cropTracker ? mp.detectPosePreciseTracked(v, params, cropTracker) : mp.detectPosePrecise(v, params)).catch(() => null);
           if (kps) canvasRef.current?.addBakeSample?.(v.currentTime, kps);
         } else {
           // MoveNet fallback: the paused-frame 'seeked' detection (Canvas pose
           // scheduler) feeds the bake via the bridge hook — give it one beat.
           await new Promise((r) => setTimeout(r, 90));
         }
+        if (k % 10 === 0) poseDbg.event(`AI Track ${k}/${total} · ${Math.round((performance.now() - passT0) / k)} ms/frame`); // TEMP-DEBUG-POSE
         if (k % 3 === 0 || k === total) {
           setProcessingStatus(`AI-tracking… ${Math.round((k / total) * 100)}% (${params.speedLabel}${useMediaPipe ? ' · real feet' : ''})`);
         }
@@ -1679,6 +1751,9 @@ function Home() {
         return 0;
       }
       const kept = canvasRef.current?.finishBakeCapture?.({ start, end }) ?? 0;
+      if (cropTracker && process.env.NODE_ENV !== 'production') {
+        console.log(`[PrecisionTrack] crop tracking: ${cropTracker.cropFrames} crop / ${cropTracker.fullFrames} full-frame / ${cropTracker.reacquires} re-acquires`);
+      }
       if (kept >= 2 && process.env.NODE_ENV !== 'production') {
         const passMs = performance.now() - passT0;
         console.log(`[PrecisionTrack] ${kept} frames in ${Math.round(passMs)}ms (${Math.round(passMs / Math.max(1, end - start))}ms per video-second, engine=${useMediaPipe ? 'mediapipe-full' : 'movenet'})`);
@@ -1699,6 +1774,12 @@ function Home() {
     setPrecisionTrackState('running');
     try {
       const kept = await runPrecisionPass(start, end, quality);
+      // Foot Lines are part of the standard AI Track output: on when this baked track really carries foot
+      // points (MediaPipe passes do; the MoveNet fallback bake does not). Draw-only flag, see aiTrackFootLines.
+      if (!precisionAbortRef.current && kept >= 2
+        && posesHaveFeet(sampleTimes(start, end).map((t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null))) {
+        setAiTrackFootLines(true);
+      }
       const note = lockNoteRef.current ? ` ${lockNoteRef.current}` : '';
       if (precisionAbortRef.current) {
         setProcessingStatus('AI Track cancelled');
@@ -1750,6 +1831,7 @@ function Home() {
   const handlePrecisionTrackClear = useCallback(() => {
     canvasRef.current?.clearBakedTrack?.();
     setPrecisionTrackState('idle');
+    setAiTrackFootLines(false);
     setProcessingStatus('AI Track cleared — live tracking resumed');
   }, []);
 
@@ -1787,7 +1869,7 @@ function Home() {
 
   // The baked track dies with its video (Canvas clears it too) — reset the UI,
   // and forget any manual section selection so the next video starts as "whole".
-  useEffect(() => { setPrecisionTrackState('idle'); setMetricsTrimUserAdjusted(false); }, [videoSrc]);
+  useEffect(() => { setPrecisionTrackState('idle'); setAiTrackFootLines(false); setMetricsTrimUserAdjusted(false); }, [videoSrc]);
 
   /**
    * A ruler calibration is only valid for the clip it was measured on — camera
@@ -2312,7 +2394,10 @@ function Home() {
     const vw = video.videoWidth, vh = video.videoHeight;
 
     let det: { x: number; y: number; w: number; h: number } | null = null;
-    if (domWrist?.score >= 0.2) {
+    // PHONE + racket pass ON: D-FINE (in a terminable worker, see lib/stroMotionDraft/racketWorker.ts) finds the racket, so COCO-SSD is NOT loaded.
+    // Measured (desktop, phone limits): COCO-SSD's tfjs/WebGL model holds ~+430 MB that is never returned. The wrist→tip fallback box below still applies.
+    const skipCoco = racketWorkerEnabled() && autoRacketEnabled(stroObjectType);
+    if (domWrist?.score >= 0.2 && !skipCoco) {
       try {
         const { detectTennisRacketNearHint } = await import('@/lib/racketCocoDetect');
         const r = 0.16;
@@ -2349,7 +2434,7 @@ function Home() {
       }
     }
     return { det, fallback, kps, zoneKps };
-  }, [videoRef, canvasRef, seekStroVideo]);
+  }, [videoRef, canvasRef, seekStroVideo, stroObjectType]);
 
   /**
    * The pose for EXACTLY `timeSec`, in video-native pixels. ONE resolver, shared
@@ -2757,6 +2842,7 @@ function Home() {
     const yieldFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     for (let i = 0; i < pending.length; i++) {
       setProcessingStatus(`AI detecting the athlete: frame ${i + 1}/${pending.length}…`);
+      recordStage(`Auto-detect: object detection, frame ${i + 1}/${pending.length}`);
       // A single frame's detection error must NOT abort the whole batch — that
       // left every later frame empty ("click a frame → draw a box again").
       try {
@@ -2872,6 +2958,42 @@ function Home() {
     );
   }, [detectObjectBoxAtFrame, autoProcessStroFrames, videoRef]);
 
+  // PHONE ONLY: "Opening editor…" from the start of the native-size finalize until the
+  // first layers are drawn (lib/stroMotionDraft/phoneFinalize.ts). The events are
+  // only ever sent on a phone, so off a phone none of this runs. The pass's final
+  // message is held while the notice is up and shown when it ends.
+  const stroOpeningRef = useRef<{ active: boolean; final: string | null; prev: string | null; timer: number | null }>({ active: false, final: null, prev: null, timer: null });
+  const stroEndOpening = useCallback(() => {
+    const o = stroOpeningRef.current;
+    if (o.timer !== null) { window.clearTimeout(o.timer); o.timer = null; }
+    if (!o.active) return;
+    o.active = false;
+    const restore = o.final ?? o.prev;
+    o.final = null;
+    o.prev = null;
+    setProcessingStatus((cur) => (cur === OPENING_EDITOR_TEXT ? restore : cur));
+  }, []);
+  const setStroFinalStatus = useCallback((msg: string) => {
+    if (stroOpeningRef.current.active) { stroOpeningRef.current.final = msg; return; }
+    stroOpeningRef.current.final = null;
+    setProcessingStatus(msg);
+  }, []);
+  useEffect(() => {
+    const onOpening = () => {
+      const o = stroOpeningRef.current;
+      if (o.active) return;
+      o.active = true;
+      setProcessingStatus((cur) => { o.prev = cur === OPENING_EDITOR_TEXT ? null : cur; return OPENING_EDITOR_TEXT; });
+      o.timer = window.setTimeout(stroEndOpening, OPENING_EDITOR_FAILSAFE_MS);
+    };
+    window.addEventListener(OPENING_EDITOR_EVENT, onOpening);
+    window.addEventListener(FIRST_LAYERS_DRAWN_EVENT, stroEndOpening);
+    return () => {
+      window.removeEventListener(OPENING_EDITOR_EVENT, onOpening);
+      window.removeEventListener(FIRST_LAYERS_DRAWN_EVENT, stroEndOpening);
+    };
+  }, [stroEndOpening]);
+
   /** One click (or auto-trigger): boxes + masks for every pending frame. */
   const stroAutoSelectBusyRef = useRef(false);
   const handleStroAutoSelectAll = useCallback(async () => {
@@ -2892,6 +3014,13 @@ function Home() {
       return;
     }
     stroAutoSelectBusyRef.current = true;
+    // PHONE ONLY: the crash marker starts at the click, not when the mask pass begins, so a
+    // kill during the pose pass below (it loads the pose model and its WebGL programs) also
+    // gets the notice. The pass itself keeps it until the first layers are drawn; every path
+    // that ends without reaching the pass clears it in the `finally` below.
+    const phoneRun = isPhoneBudgetActive();
+    if (phoneRun) { markAutoDetectStarted(); recordStage('Auto-detect: started'); }
+    let phoneHeld = false;
     // ── SLOW, SETTLED, EXACT — for the mask AND for what the coach sees ──────
     //
     // The pass takes the EXACT-POSE LOCK and nothing else. Under the lock the
@@ -2936,6 +3065,7 @@ function Home() {
         const specs: StroAutoFrameSpec[] = [];
         for (let i = 0; i < pending.length; i++) {
           setProcessingStatus(`AI detecting the athlete: frame ${i + 1}/${pending.length}…`);
+          recordStage(`Auto-detect: pose pass, frame ${i + 1}/${pending.length}`);
           let spec: StroAutoFrameSpec | null = null;
           try {
             spec = await buildPlayerFrameSpec(pending[i].index);
@@ -2977,6 +3107,7 @@ function Home() {
           setProcessingStatus(`Removing background: frame ${done}/${total}…`),
         );
       }
+      phoneHeld = ok > 0; // the pass's phone wrapper keeps the marker until the first layers are drawn
       void refreshStroPreviewFromDraft();
       console.log('[StroMotion] auto-detect committed', ok, 'of', pending.length, 'frames');
       // Frames with no exact pose are committed with the selection box as their
@@ -2987,21 +3118,26 @@ function Home() {
       const noPoseNote = noPose.length
         ? ` No skeleton found on frame${noPose.length > 1 ? 's' : ''} ${noPose.join(', ')} — check ${noPose.length > 1 ? 'those' : 'that one'} first.`
         : '';
-      setProcessingStatus(
+      if (ok === 0) stroEndOpening();
+      setStroFinalStatus(
         ok === 0
           ? 'Auto-detect found nothing — make sure the subject is visible, or use Select Area manually.'
           : `AI auto-selected ${ok}/${pending.length} frames. Review each, fix with Add brush if needed, then Generate.${noPoseNote}`,
       );
     } catch (err) {
       console.error('[StroMotion] auto-detect crashed', err);
+      stroEndOpening();
       setProcessingStatus('Auto-detect hit an error (see console). Try Select Area on a frame manually.');
     } finally {
       stroAutoSelectBusyRef.current = false;
+      // Phone: when the pass built frames its wrapper holds the marker until the first layers
+      // are drawn; on any other exit (nothing found, an error) it is cleared here.
+      if (phoneRun && !phoneHeld) markAutoDetectFinished();
       // Releasing hands the skeleton back to the coach's own setting, which this
       // pass never changed. Released on every exit path, including a crash.
       canvasRef.current?.setExactPoseLock?.(false);
     }
-  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, videoRef, canvasRef]);
+  }, [stroMotionDraft, stroObjectType, autoSelectAllObjectFrames, buildPlayerFrameSpec, autoProcessStroFrames, refreshStroPreviewFromDraft, setStroFinalStatus, stroEndOpening, videoRef, canvasRef]);
 
   // SPEC: no auto-trigger. Opening StroMotion only opens the toolbar; the AI
   // pass starts when the coach presses "AI auto-detect" after choosing the
@@ -3275,15 +3411,18 @@ function Home() {
   ]);
 
   const handleStroDownloadPng = useCallback(() => {
+    const save = (url: string) => {
+      saveImageFromUrl(url, `motion-layer-${Date.now()}.png`).catch(() => {
+        setProcessingStatus('Could not save the PNG. Try again.');
+      });
+    };
     if (stroPreviewPngUrl) {
-      downloadDataURL(stroPreviewPngUrl, `motion-layer-${Date.now()}.png`);
+      save(stroPreviewPngUrl);
       return;
     }
     const video = videoRef.current;
     if (video && stroMotionDraft) {
-      void exportStroMotionDraftPng(video, stroMotionDraft).then((url) => {
-        downloadDataURL(url, `motion-layer-${Date.now()}.png`);
-      }).catch(() => {
+      void exportStroMotionDraftPng(video, stroMotionDraft).then(save).catch(() => {
         setProcessingStatus('Could not export PNG. Generate Motion Layer first.');
       });
       return;
@@ -3331,7 +3470,7 @@ function Home() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `motion-layer-${Date.now()}.webm`;
+    a.download = `motion-layer-${Date.now()}.${videoFileExtForBlob(blob)}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -3342,6 +3481,16 @@ function Home() {
   // of its own the nearest one is the page-root `fallback={null}`, so opening
   // Motion Layer blanked the WHOLE analysis page until the chunk arrived (the
   // black screen reported on iPhone). See components/shared/LazyPanelBoundary.
+  // Racket detection switch (Auto Detect panel). The value lives in localStorage 'autoRacket' (autoRacketFlags.ts), which the
+  // detection pass already reads, so the switch changes behaviour without touching the pass. Re-read when the object type changes
+  // because the default depends on it (and on phones it is OFF until the coach turns it on).
+  const [stroRacketDetect, setStroRacketDetect] = useState(false);
+  useEffect(() => { setStroRacketDetect(autoRacketEnabled(stroObjectType)); }, [stroObjectType, stroMotionActive]);
+  const handleStroRacketDetectChange = useCallback((on: boolean) => {
+    setAutoRacketPreference(on);
+    setStroRacketDetect(on);
+  }, []);
+
   const stroMotionPanelEl = (
     <LazyPanelBoundary label="Motion Layer">
     <StroMotionPanel
@@ -3371,6 +3520,9 @@ function Home() {
       onGenerate={() => void handleStroGenerate()}
       onClear={softClearStroMotion}
       onAutoSelectAll={() => { void handleStroAutoSelectAll(); }}
+      racketDetect={stroRacketDetect}
+      onRacketDetectChange={handleStroRacketDetectChange}
+      racketDetectPhoneWarning={isPhoneBudgetActive()}
       lastAutoRun={stroLastAutoRun}
       previewPngUrl={stroPreviewPngUrl}
       previewVideoUrl={stroPreviewVideoUrl}
@@ -3411,10 +3563,37 @@ function Home() {
   }, [stroMotionActive, stroMotionHtml5Only, stroMotionDraft, stroActiveFrameIndex]);
 
   useEffect(() => {
-    if (stroMotionActive && stroMotionHtml5Only) {
+    if (!(stroMotionActive && stroMotionHtml5Only)) return;
+    if (!isPhoneBudgetActive()) {
       void import('@/lib/racketCocoDetect').then((m) => m.preloadRacketDetector());
+      return;
     }
-  }, [stroMotionActive, stroMotionHtml5Only]);
+    // PHONE + racket pass ON: no COCO-SSD at all (D-FINE in a worker replaces it; its tfjs/WebGL model is ~+430 MB that is never returned).
+    // This sits AFTER the desktop branch above and BEFORE the sequenced warm-up, which is unchanged for every other phone setup.
+    if (racketWorkerEnabled() && autoRacketEnabled(stroObjectType)) return;
+    // PHONE ONLY (docs/PHONE_REFRESH_AFTER_AUTODETECT.md §7): the COCO-SSD warm-up compiles ~260
+    // WebGL programs on the main thread and holds a model Auto-detect does not use, so it starts
+    // AFTER the person-segmenter warm-up has had a head start and never while Auto-detect is
+    // running; "Preparing Motion Layer…" is on screen from the first frame. The racket tool and
+    // object tracking get the same detector, a few seconds later.
+    let cancelled = false;
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+    const clearPreparing = () => setProcessingStatus((cur) => (cur === PREPARING_MOTION_LAYER_TEXT ? null : cur));
+    setProcessingStatus((cur) => cur ?? PREPARING_MOTION_LAYER_TEXT);
+    recordStage('Motion Layer opened (warming models)');
+    void (async () => {
+      await sleep(1500);
+      while (!cancelled && stroAutoSelectBusyRef.current) await sleep(1000);
+      if (cancelled) return;
+      try {
+        recordStage('Motion Layer: loading the racket-tool detector');
+        const m = await import('@/lib/racketCocoDetect');
+        await m.preloadRacketDetector();
+      } catch { /* best-effort */ }
+      if (!cancelled) clearPreparing();
+    })();
+    return () => { cancelled = true; clearPreparing(); };
+  }, [stroMotionActive, stroMotionHtml5Only, stroObjectType]);
 
   /** Clear the Metrics/Snapshot analysis state (snapshots, data column, skeleton). */
   const resetMetrics = useCallback(() => {
@@ -3491,7 +3670,7 @@ function Home() {
     if (!screenshotDataUrl) return;
     if (!canUseFeature('saveToPlayer')) {
       setUpgradeFeature('saveToPlayer');
-      if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: 'Saving to a player is part of the Pro plan — the image was not saved.' });
+      if (REPORTS_IN_APP) setScreenshotMessage({ kind: 'error', text: 'Saving to a player needs an active plan — the image was not saved.' });
       return;
     }
     // One save at a time: a second tap while the first is still running would
@@ -3602,7 +3781,7 @@ function Home() {
       // Checked BEFORE creating, so a plan block does not leave a new empty player behind.
       if (!canUseFeature('saveToPlayer')) {
         setUpgradeFeature('saveToPlayer');
-        setScreenshotMessage({ kind: 'error', text: 'Saving to a player is part of the Pro plan — no player was created and the image was not saved.' });
+        setScreenshotMessage({ kind: 'error', text: 'Saving to a player needs an active plan — no player was created and the image was not saved.' });
         return;
       }
       setScreenshotSaving(true);
@@ -3714,7 +3893,7 @@ function Home() {
     // Gated: only the snapshot domain may write the snapshot store.
     if (analysisMode.kind !== 'snapshot') return;
     const ownerId = analysisMode.snapshotId;
-    const nonAngle = measurementColumn.filter(m => m.type !== 'skeleton-angle');
+    const nonAngle = persistableRows(measurementColumn);
     setSnapshots(prev => {
       const cur = prev.find(s => s.id === ownerId);
       if (!cur) return prev;
@@ -3734,9 +3913,9 @@ function Home() {
   }, [measurementColumn, analysisMode]);
 
   // Live skeleton angle updates → data column (throttled to avoid render storms)
-  const liveAnglesRef = useRef<Array<{ label: string; deg: number }>>([]);
+  const liveAnglesRef = useRef<Array<{ label: string; deg: number | null }>>([]);
   const angleThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ALL_ANGLE_LABELS = ['L Elbow', 'R Elbow', 'L Knee', 'R Knee'];
+  const ALL_ANGLE_LABELS = SKELETON_ANGLE_LABELS;
 
   const flushAnglesToColumn = useCallback(() => {
     // Mode isolation: live skeleton-angle rows belong to LIVE mode only. In
@@ -3747,7 +3926,7 @@ function Home() {
     const angleItems = ALL_ANGLE_LABELS.map(label => ({
       id: `skel-${label}`,
       label,
-      value: angleMap.get(label) ?? 0,
+      value: angleMap.get(label) ?? null, // unknown = null (shown as a dash), never 0°
       unit: '°',
       type: 'skeleton-angle',
     }));
@@ -3771,14 +3950,28 @@ function Home() {
     if (!dismissed) setFootLineNoticeOpen(true);
   }, []);
 
+  /**
+   * The toolbar's "Foot line" checkbox. With a baked AI Track it drives ONLY the draw-only AI Track flag, so it
+   * can never change the live pose engine (no popup, no live-model switch). Without one it is the existing
+   * live-model opt-in, unchanged.
+   */
+  const handleFootLineCheckbox = useCallback((on: boolean) => {
+    if (precisionTrackState === 'ready') {
+      setAiTrackFootLines(on);
+      if (!on && skeletonShowFootLine) handleSkeletonShowFootLineChange(false); // turning off is free and never switches an engine on
+      return;
+    }
+    handleSkeletonShowFootLineChange(on);
+  }, [precisionTrackState, skeletonShowFootLine, handleSkeletonShowFootLineChange]);
+
   /** Canvas reverted live MediaPipe → MoveNet because this device can't sustain it. */
   const handleFootLineLiveUnsupported = useCallback((reason: string) => {
     setFootLineUnsupported(reason);
   }, []);
 
-  const handleSkeletonAnglesUpdate = useCallback((angles: Array<{ label: string; deg: number }>) => {
+  const handleSkeletonAnglesUpdate = useCallback((angles: Array<{ label: string; deg: number | null }>) => {
     liveAnglesRef.current = angles;
-    if (!skeletonFirstDetectedRef.current && angles.length > 0) {
+    if (!skeletonFirstDetectedRef.current && hasAnyAngle(angles)) {
       skeletonFirstDetectedRef.current = true;
       setTimeout(() => setSkeletonConfirmOpen(true), 1500);
     }
@@ -4026,6 +4219,9 @@ function Home() {
       return true;
     });
   }, []);
+
+  /** One-finger double-tap while precision drawing is on: back to normal drawing. */
+  const handlePrecisionDeactivate = useCallback(() => setPrecisionDrawEnabled(false), []);
 
   const dismissPrecisionInstructions = useCallback(() => {
     markPrecisionInstructionsSeen();
@@ -4407,6 +4603,35 @@ function Home() {
   }, [resetSession, videoRef]);
 
   // ── Video upload ──────────────────────────────────────────────────────────
+  // Phone memory budget: if the last Auto-detect on this phone never finished (the marker
+  // set before its heavy phase is still there), say why the page restarted. One line,
+  // shown once, never blocks anything (lib/stroMotionDraft/phoneBudget.ts).
+  useEffect(() => {
+    if (!consumeAutoDetectKilled()) return;
+    // The phone's memory stopped the last run: from now on this phone works one size smaller (phoneShrink/tier.ts).
+    try {
+      const cur = parseTier(window.localStorage.getItem(SHRINK_TIER_KEY)) ?? DEFAULT_PHONE_TIER;
+      window.localStorage.setItem(SHRINK_TIER_KEY, String(lowerTier(cur)));
+    } catch { /* storage blocked */ }
+    const id = window.setTimeout(() => setProcessingStatus(AUTODETECT_KILLED_NOTICE), 1500);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  // PHONE ONLY (docs/PHONE_REFRESH_AFTER_AUTODETECT.md): the phone check, resolved after
+  // mount so the first render matches the server's; and the restart breadcrumb, which
+  // says on the next load why the page restarted. Neither runs off a phone.
+  const [phoneGate, setPhoneGate] = useState(false);
+  const [restartNotice, setRestartNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isPhoneBudgetActive()) return;
+    setPhoneGate(true);
+    let storage: Storage | null = null;
+    try { storage = window.sessionStorage; } catch { /* blocked */ }
+    const trail = installRestartBreadcrumb({ win: window, doc: document, storage, navType: currentNavType() });
+    if (trail.verdict) setRestartNotice(trail.verdict.text);
+    return trail.dispose;
+  }, []);
+
   const resetToolAfterVideoLoad = useCallback(() => {
     setActiveTool('select');
     setDrawContextActive(false);
@@ -4426,7 +4651,7 @@ function Home() {
     v.addEventListener('error', paint, { once: true });
   }, []);
 
-  const loadVideoFileIntoSlot = useCallback((
+  const loadVideoFileIntoSlotNow = useCallback((
     file: File,
     target: 'A' | 'B',
   ) => {
@@ -4464,6 +4689,39 @@ function Home() {
     resetToolAfterVideoLoad,
     revokeBlobUrl,
   ]);
+
+  // PHONE ONLY (lib/phoneShrink): a video bigger than this phone's tier is shrunk to that size
+  // (1080p, or 720p / 540p on a phone that was stopped by its memory) before it opens. Off a phone
+  // the file opens exactly as before, synchronously.
+  const [shrinkState, setShrinkState] = useState<{ pct: number; label: string } | null>(null);
+  const shrinkHandleRef = useRef<ShrinkHandle>({ cancel: () => {} });
+  const loadVideoFileIntoSlot = useCallback((file: File, target: 'A' | 'B') => {
+    const forced = parseTier(new URLSearchParams(window.location.search).get('shrink'));
+    const isPhone = isPhoneBudgetActive();
+    if (!isPhone && !forced) { loadVideoFileIntoSlotNow(file, target); return; }
+    void (async () => {
+      let toLoad = file;
+      try {
+        let stored: ReturnType<typeof parseTier> = null;
+        try {
+          if (forced && isPhone) window.localStorage.setItem(SHRINK_TIER_KEY, String(forced));
+          stored = parseTier(window.localStorage.getItem(SHRINK_TIER_KEY));
+        } catch { /* storage blocked */ }
+        const info = await probeVideo(file);
+        const t = info ? shrinkTarget({ isPhone, stored, forced, nativeW: info.w, nativeH: info.h, durationSec: info.sec }) : null;
+        if (t) {
+          const label = tierLabel(t.tier);
+          setShrinkState({ pct: 0, label });
+          shrinkHandleRef.current = { cancel: () => {} };
+          const small = await shrinkVideoFile(file, t, (f) => setShrinkState({ pct: Math.round(f * 100), label }), shrinkHandleRef.current);
+          if (small) toLoad = small;
+        }
+      } catch { /* open the original */ } finally {
+        setShrinkState(null);
+      }
+      loadVideoFileIntoSlotNow(toLoad, target);
+    })();
+  }, [loadVideoFileIntoSlotNow]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -5512,7 +5770,7 @@ function Home() {
     const ctrl = playbackControllerARef.current;
     const dur = youtubeVideoIdA ? ctrl?.getDuration() : video?.duration;
     if (!Number.isFinite(dur) || !dur || dur <= 0) {
-      setProcessingStatus('No video loaded. Upload a video or paste a YouTube URL first.');
+      setProcessingStatus('No video loaded. Upload a video first.');
       return;
     }
 
@@ -5642,6 +5900,8 @@ function Home() {
     [cleanupVideoEl],
   );
 
+  // V2: importing from a pasted link is abandoned (founder, 2026-11). No field or button calls this any more;
+  // kept, not deleted, as a deferred feature. Upload and Google Drive are the supported ways in.
   const handleUrlSubmit = useCallback(async () => {
     const raw = normalizeWebUrlInput(urlInput);
     if (!raw) return;
@@ -6659,18 +6919,18 @@ function Home() {
         onSampleMarkerChange: (id: string, time: number) => {
           const idx = Number(id.replace('stro-stop-', ''));
           if (!Number.isFinite(idx)) return;
-          setStroSampleTimesOverride((prev) => {
-            const base = prev ?? [...stroEffectiveSampleTimes];
-            const next = [...base];
-            if (idx >= 0 && idx < next.length) next[idx] = time;
-            return enforceMonotonicSampleTimes(next, stroStartFrame, stroEndFrame);
-          });
-          updateStroFrameTime(idx, time);
+          // Only this stop moves; it can pass the others (Generate orders the frames by time).
+          const base = stroSampleTimesOverride ?? [...stroEffectiveSampleTimes];
+          const moved = moveSampleTime(base, idx, time, stroStartFrame, stroEndFrame);
+          const at = moved[idx] ?? time;
+          setStroSampleTimesOverride(moved);
+          updateStroFrameTime(idx, at);
           setStroActiveFrameIndex(idx);
-          setStroVideoTime(time);
-          void seekStroVideo(time);
+          setStroVideoTime(at);
+          void seekStroVideo(at);
         },
         sampleMarkerBounds: { start: stroStartFrame, end: stroEndFrame },
+        selectedSampleMarkerId: `stro-stop-${stroActiveFrameIndex}`,
         defaultZoomToTrim: true,
       };
     }
@@ -6700,6 +6960,8 @@ function Home() {
     stroStartFrame,
     stroEndFrame,
     stroEffectiveSampleTimes,
+    stroSampleTimesOverride,
+    stroActiveFrameIndex,
     seekStroVideo,
     updateStroFrameTime,
     setStroActiveFrameIndex,
@@ -6764,6 +7026,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 onSampleMarkerSelect={analysisTimelineExtras.onSampleMarkerSelect}
                 onSampleMarkerChange={analysisTimelineExtras.onSampleMarkerChange}
                 sampleMarkerBounds={analysisTimelineExtras.sampleMarkerBounds}
+            selectedSampleMarkerId={'selectedSampleMarkerId' in analysisTimelineExtras ? analysisTimelineExtras.selectedSampleMarkerId : null}
                 defaultZoomToTrim={analysisTimelineExtras.defaultZoomToTrim}
               />
             )
@@ -6801,6 +7064,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             onSampleMarkerSelect={analysisTimelineExtras.onSampleMarkerSelect}
             onSampleMarkerChange={analysisTimelineExtras.onSampleMarkerChange}
             sampleMarkerBounds={analysisTimelineExtras.sampleMarkerBounds}
+            selectedSampleMarkerId={'selectedSampleMarkerId' in analysisTimelineExtras ? analysisTimelineExtras.selectedSampleMarkerId : null}
             defaultZoomToTrim={analysisTimelineExtras.defaultZoomToTrim}
           />
         )
@@ -6853,8 +7117,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onSkeletonShowHeadLineChange:    setSkeletonShowHeadLine,
     skeletonShowHeadDirection,
     onSkeletonShowHeadDirectionChange: setSkeletonShowHeadDirection,
-    skeletonShowFootLine,
-    onSkeletonShowFootLineChange:    handleSkeletonShowFootLineChange,
+    skeletonShowFootLine: footLineChecked({ liveFlag: skeletonShowFootLine, aiTrackFlag: aiTrackFootLines, bakedReady: precisionTrackState === 'ready' }),
+    onSkeletonShowFootLineChange:    handleFootLineCheckbox,
     skeletonActive:                  skeletonOn,
     onSkeletonActiveChange:          () => setSkeletonOn((v) => !v),
     precisionTrackState,
@@ -7018,11 +7282,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         } catch { /* feet unavailable — the anatomical estimate still applies */ }
       }
       // Capture the LIVE column before snapshot creation (spec §6 step 1).
-      const liveCol = scrubRetiredLabels(measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle'));
+      const liveCol = scrubRetiredLabels(persistableRows(measurementColumnRef.current));
       // Step 2: compute AI measurements on the frozen pose.
       const { computePhaseMeasurements } = require('@/lib/biomechanics/measurements');
       const meas = computePhaseMeasurements('auto', 'AI Detect', 0, kps);
-      const items: typeof measurementColumn = [];
+      const items: Array<(typeof measurementColumn)[number] & { value: number }> = [];
       if (meas.jointAngles.leftElbowDeg != null) items.push({ id: `ai-le-${Date.now()}`, label: 'L Elbow', value: Math.round(meas.jointAngles.leftElbowDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.rightElbowDeg != null) items.push({ id: `ai-re-${Date.now()}`, label: 'R Elbow', value: Math.round(meas.jointAngles.rightElbowDeg), unit: '°', type: 'angle' });
       if (meas.jointAngles.leftKneeDeg != null) items.push({ id: `ai-lk-${Date.now()}`, label: 'L Knee', value: Math.round(meas.jointAngles.leftKneeDeg), unit: '°', type: 'angle' });
@@ -7353,6 +7617,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       ...toolPaletteBaseProps,
       mobileChrome: isMobile && showMobileToolStrip,
     };
+    // PHONE ONLY: the rail keeps a fixed footprint in the layout and the labels open OVER
+    // the video. Growing the rail in the flow resized the canvas on every frame of the 200 ms
+    // width transition, and each resize re-composited every Motion Layer at native size
+    // (measured: 5 composites, 79 MiB of readbacks and a 2 s block per tap).
+    const railOverlay = phoneGate && compactToolbarRail;
     return (
       <aside
         ref={tempDebugAsideElRef} /* TEMP-DEBUG: direct handle to read real rendered rail width — remove later */
@@ -7360,12 +7629,13 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         className="anglemotion-video-toolbar"
         style={{
           flexShrink: 0,
-          width: toolbarWidthPx,
-          transition: 'width 200ms ease',
+          width: railOverlay ? TOOLBAR_MOBILE_W : toolbarWidthPx,
+          transition: railOverlay ? 'none' : 'width 200ms ease',
+          position: railOverlay ? 'relative' : undefined,
           display: 'flex',
           flexDirection: 'column',
           minHeight: 0,
-          overflow: 'hidden',
+          overflow: railOverlay ? 'visible' : 'hidden',
           zIndex: 80,
           background: '#FFFFFF',
           borderRight: '1px solid #D1D1D6',
@@ -7380,6 +7650,20 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             display: 'flex',
             flexDirection: 'column',
             padding: isMobile ? '4px 4px' : '6px 4px',
+            ...(railOverlay
+              ? {
+                  position: 'absolute' as const,
+                  top: 0,
+                  bottom: 0,
+                  left: 0,
+                  width: toolbarWidthPx,
+                  boxSizing: 'border-box' as const,
+                  background: '#FFFFFF',
+                  borderRight: '1px solid #D1D1D6',
+                  boxShadow: toolbarLabelsExpanded ? '2px 0 12px rgba(0,0,0,0.18)' : 'none',
+                  transition: 'width 200ms ease',
+                }
+              : null),
           }}
         >
           <ToolPalette {...paletteProps} />
@@ -7404,6 +7688,29 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         WebkitTouchCallout: 'none',
       }}
     >
+      {restartNotice && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed', top: 8, left: 8, right: 8, zIndex: 100000,
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '8px 12px', borderRadius: 10,
+            background: 'rgba(255,255,255,0.97)', color: '#1D1D1F',
+            border: '1px solid #D1D1D6', boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
+            fontSize: 13, lineHeight: 1.35,
+          }}
+        >
+          <span style={{ flex: 1 }}>{restartNotice}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setRestartNotice(null)}
+            style={{ border: 'none', background: 'transparent', fontSize: 18, lineHeight: 1, padding: '2px 6px', cursor: 'pointer', color: '#1D1D1F' }}
+          >
+            ×
+          </button>
+        </div>
+      )}
       {precisionDialog && (
         <PrecisionTrackDialog
           sectionSec={precisionDialog.sectionSec}
@@ -7636,6 +7943,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   containerHeight={canvasSize.height}
                   ballTrailMode={ballTrailMode}
                   skeletonEnabled={skeletonEnabled && markupTarget === 'A'}
+                  parkLiveEngines={stroMotionActive && racketWorkerEnabled() && !skeletonConfirmOpen && !skeletonWaitingForClick && !(typeof window !== 'undefined' && (window as unknown as { __noPark?: boolean }).__noPark)}
+                  /* NOT while the coach is aiming the skeleton ("Click the player — Lock"): that step needs the live engine; parked, the skeleton ignored the click (real iPhone 2026-11-10). */
                   skeletonDrawEnabled={skeletonEnabled && markupTarget === 'A' && !skeletonOverlayPaused}
                   ballTrailEnabled={ballTrailEnabled}
                   onProcessingStatus={setProcessingStatus}
@@ -7685,6 +7994,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     });
                   }}
                   onMeasurementAdd={() => {
+                    if (askAboutLastDrawing()) return;
                     const label = prompt('Label:');
                     if (!label?.trim()) return;
                     const valStr = prompt('Value (empty for text-only):');
@@ -7717,10 +8027,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       }
                       return;
                     }
-                    if (dataColumnVisible) {
-                      setPendingMeasurement(m);
-                      setPendingMeasurementName(m.type === 'angle' ? 'Angle' : m.type === 'arrowAngle' ? 'Arrow angle' : 'Distance');
-                    }
+                    // No modal per drawing: remember it, the column's "+" asks about the last one (lib/columnPrompt.ts).
+                    if (dataColumnVisible) setLastMeasurement(m);
                   }}
                   isRecording={isRecording}
                   suppressWebcamPipWhileRecording={suppressWebcamPipWhileRecording}
@@ -7749,6 +8057,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   skeletonShowHeadLine={skeletonShowHeadLine}
                   skeletonShowHeadDirection={skeletonShowHeadDirection}
                   skeletonShowFootLine={skeletonShowFootLine}
+                  aiTrackFootLines={aiTrackFootLines}
                   onFootLineLiveUnsupported={handleFootLineLiveUnsupported}
                   skeletonClassicColors={skeletonClassicColors}
                   skeletonParts={skeletonParts}
@@ -7759,6 +8068,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   webcamCutout={webcamCutout}
                   precisionTouchDraw={precisionAvailable && precisionDrawEnabled}
                   onPrecisionHoldActivate={precisionAvailable ? handlePrecisionHoldActivate : undefined}
+                  onPrecisionDeactivate={precisionAvailable ? handlePrecisionDeactivate : undefined}
                   webcamPipMobileChrome={isMobile}
                   webcamPipBottomInsetPx={toolbarBottomReservePx}
                   showTourHelpInZoomCluster={toursEnabled}
@@ -7781,10 +8091,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     compact={isMobile}
                     precisionAvailable={precisionAvailable}
                     onMeasurement={(value, unit) => {
-                      if (dataColumnActive) {
-                        setPendingMeasurement({ type: 'ruler', value, unit });
-                        setPendingMeasurementName('Distance');
-                      }
+                      if (dataColumnActive) setLastMeasurement({ type: 'ruler', value, unit });
                     }}
                   />
                 )}
@@ -7802,8 +8109,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                     <div style={{
                       display: 'flex', gap: 4, pointerEvents: 'auto',
                     }}>
-                      <button type="button" onClick={() => {
+                      <button type="button" title={lastMeasurement ? 'Add your last drawing to the column' : 'Add a note to the column'} aria-label={lastMeasurement ? 'Add last drawing to the column' : 'Add a note to the column'} onClick={() => {
                         setColumnDeleteMode(false);
+                        if (askAboutLastDrawing()) return;
                         const label = prompt('Label:');
                         if (!label?.trim()) return;
                         const valStr = prompt('Value (empty for text-only):');
@@ -7812,7 +8120,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                         setMeasurementColumn(prev => [...prev, { id: `n-${Date.now()}`, label: label.trim(), value: isNaN(val) ? 0 : val, unit, type: 'note' }]);
                       }} style={{
                         width: 24, height: 24, borderRadius: 6, border: 'none',
-                        background: 'rgba(255,255,255,0.2)', color: '#fff',
+                        background: lastMeasurement ? '#007AFF' : 'rgba(255,255,255,0.2)', color: '#fff',
                         fontSize: 16, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
                       }}>+</button>
                       <button type="button" onClick={() => setColumnDeleteMode(d => !d)} style={{
@@ -8542,6 +8850,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       webcamCutout={webcamCutout}
                       precisionTouchDraw={precisionAvailable && precisionDrawEnabled}
                       onPrecisionHoldActivate={precisionAvailable ? handlePrecisionHoldActivate : undefined}
+                  onPrecisionDeactivate={precisionAvailable ? handlePrecisionDeactivate : undefined}
                       webcamPipMobileChrome={isMobile}
                       webcamPipBottomInsetPx={toolbarBottomReservePx}
                       poseFrameSkip={1}
@@ -9493,7 +9802,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           {/* Differential: if there's a previous arrowAngle in the column, offer to compute difference */}
           {pendingMeasurement.type === 'arrowAngle' && measurementColumn.some(m => m.type === 'arrowAngle') && (() => {
             const lastAngle = [...measurementColumn].reverse().find(m => m.type === 'arrowAngle');
-            if (!lastAngle) return null;
+            if (!lastAngle || lastAngle.value == null) return null;
             // Bearings are 0..360 now, so a raw subtraction wraps (350 vs 10
             // would read 340, not 20). Same helper the automatic flow uses.
             const diff = angleDifferenceDeg(pendingMeasurement.value, lastAngle.value);
@@ -9730,6 +10039,38 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           (RecordingProvider + FloatingRecordingIndicator in app/layout.tsx) —
           they survive navigation to any page, so nothing to mount here. */}
 
+      {shrinkState && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 250,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '10px 14px',
+            borderRadius: 12,
+            background: 'rgba(20,20,22,0.92)',
+            color: '#fff',
+            fontSize: 13,
+            maxWidth: 'calc(100vw - 24px)',
+          }}
+        >
+          <span>Optimizing the video for your phone ({shrinkState.label})… {shrinkState.pct}%</span>
+          <button
+            type="button"
+            onClick={() => shrinkHandleRef.current.cancel()}
+            style={{ border: '1px solid rgba(255,255,255,0.4)', background: 'transparent', color: '#fff', borderRadius: 8, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}
+          >
+            Skip
+          </button>
+        </div>
+      )}
+
       {(processingStatus || stroMotionProcessing || angleDiffState) && (
         <div
           data-testid="status-toast"
@@ -9758,8 +10099,10 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             gap: 10,
             opacity: statusFading ? 0 : 1,
             transition: `opacity ${FADE_MS}ms ease`,
+            overflow: 'hidden',
           }}
         >
+          {(() => { const pc = percentFromStatus(processingStatus); return pc === null ? null : <div aria-hidden style={{ position: 'absolute', left: 0, bottom: 0, height: 3, width: `${pc}%`, background: '#007AFF', transition: 'width 200ms linear' }} />; })()}
           <span style={{ flex: 1 }}>
             {angleDiffState
               ? angleDiffState.first === null
@@ -9992,7 +10335,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             getBakedPoseAt: (t) => canvasRef.current?.getBakedPoseAt?.(t) ?? null,
             isRangeBaked: (a, b) => canvasRef.current?.isRangeBaked?.(a, b) ?? false,
             hasBakedTrack: () => !!canvasRef.current?.getBakedTrackInfo?.(),
-            clearBakedTrack: () => { canvasRef.current?.clearBakedTrack?.(); setPrecisionTrackState('idle'); },
+            clearBakedTrack: () => { canvasRef.current?.clearBakedTrack?.(); setPrecisionTrackState('idle'); setAiTrackFootLines(false); },
             drawExportOverlay: (ctx, t, w, h, o) =>
               canvasRef.current?.drawExportOverlay?.(ctx, t, w, h, o)
               ?? { box: { dx: 0, dy: 0, dw: 0, dh: 0 }, videoW: 0, videoH: 0, drawingCount: 0, strokes: [], angles: [] },

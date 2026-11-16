@@ -157,6 +157,7 @@ export default function PreciseTimeline({
   onSampleMarkerSelect,
   onSampleMarkerChange,
   sampleMarkerBounds = null,
+  selectedSampleMarkerId = null,
   defaultZoomToTrim = false,
   sound,
 }: {
@@ -189,6 +190,8 @@ export default function PreciseTimeline({
   onSampleMarkerSelect?: (id: string, time: number) => void;
   onSampleMarkerChange?: (id: string, time: number) => void;
   sampleMarkerBounds?: { start: number; end: number } | null;
+  /** The frame stop that is active: it gets a line and a grab tab above the track (like the section limits). */
+  selectedSampleMarkerId?: string | null;
   /** When true, zoom the scrub bar to the trim range (with padding) on load */
   defaultZoomToTrim?: boolean;
   /**
@@ -1627,17 +1630,17 @@ export default function PreciseTimeline({
               }}
               style={{
                 position: 'absolute',
-                left: `calc(10px + (100% - 20px) * ${pctM / 100} - 7px)`,
+                // The grab area is larger than the 14px ball you see: a finger cannot
+                // land on a 14px dot. The ball is drawn inside (below), unchanged.
+                left: `calc(10px + (100% - 20px) * ${pctM / 100} - ${(phoneChrome ? 34 : 22) / 2}px)`,
                 top: '50%',
-                // A frame stop grabbed by holding on the playhead ball grows so
-                // the coach sees which drag they are in.
-                transform: heldSampleId === m.id ? 'translateY(-50%) scale(1.5)' : 'translateY(-50%)',
-                width: 14,
-                height: 14,
+                transform: 'translateY(-50%)',
+                width: phoneChrome ? 34 : 22,
+                height: phoneChrome ? 34 : 22,
                 borderRadius: '50%',
-                background: 'linear-gradient(145deg, #D4FF00 0%, #9ACD00 55%, #6B8E00 100%)',
-                border: '2px solid rgba(255,255,255,0.9)',
-                boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 cursor: 'ew-resize',
                 // Above the inert in-track trim stripe (z8): the first/last frame-stop
                 // balls sit exactly on the start/end boundaries, so the ball paints on
@@ -1646,9 +1649,102 @@ export default function PreciseTimeline({
                 zIndex: 9,
                 touchAction: 'none',
               }}
-            />
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 14,
+                  height: 14,
+                  borderRadius: '50%',
+                  background: 'linear-gradient(145deg, #D4FF00 0%, #9ACD00 55%, #6B8E00 100%)',
+                  border: '2px solid rgba(255,255,255,0.9)',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+                  boxSizing: 'border-box',
+                  pointerEvents: 'none',
+                  // A frame stop grabbed by holding on the playhead ball grows so
+                  // the coach sees which drag they are in.
+                  transform: heldSampleId === m.id ? 'scale(1.5)' : 'none',
+                }}
+              />
+            </div>
           );
         }) : null}
+        {/* The active frame stop: a thin line through the track and a grab tab ABOVE it (same idea as
+            the section limit tabs), so it can be dragged without aiming at the small ball. */}
+        {(() => {
+          const sel = selectedSampleMarkerId && sampleMarkers ? sampleMarkers.find((m) => m.id === selectedSampleMarkerId) : null;
+          if (!sel || d <= 0) return null;
+          const selPct = timeToPct(sel.time);
+          const tabW = phoneChrome ? 40 : 30;
+          return (
+            <>
+              <div
+                aria-hidden
+                style={{
+                  position: 'absolute',
+                  left: `calc(10px + (100% - 20px) * ${selPct / 100} - 1px)`,
+                  top: -2,
+                  bottom: 2,
+                  width: 2,
+                  background: '#9ACD00',
+                  pointerEvents: 'none',
+                  zIndex: 8,
+                }}
+              />
+              <div
+                role="button"
+                aria-label={`Frame stop ${sel.label ?? ''} — drag to move`}
+                title="Drag to move this frame"
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  if (scrubbingRef.current) return;
+                  (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+                  sampleDragIdRef.current = sel.id;
+                  onSampleMarkerSelect?.(sel.id, sel.time);
+                }}
+                onPointerMove={(e) => {
+                  if (sampleDragIdRef.current !== sel.id) return;
+                  if (!(e.currentTarget as HTMLDivElement).hasPointerCapture(e.pointerId)) return;
+                  e.stopPropagation();
+                  const next = timeFromClientX(e.clientX);
+                  if (next === null || !onSampleMarkerChange) return;
+                  const lo = sampleMarkerBounds?.start ?? 0;
+                  const hi = sampleMarkerBounds?.end ?? d;
+                  onSampleMarkerChange(sel.id, clamp(next, lo, hi));
+                }}
+                onPointerUp={(e) => {
+                  if (sampleDragIdRef.current !== sel.id) return;
+                  sampleDragIdRef.current = null;
+                  try { (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
+                }}
+                onPointerCancel={() => { if (sampleDragIdRef.current === sel.id) sampleDragIdRef.current = null; }}
+                style={{
+                  position: 'absolute',
+                  left: `calc(10px + (100% - 20px) * ${selPct / 100} - ${tabW / 2}px)`,
+                  top: -(TRIM_TAB_H + 2),
+                  width: tabW,
+                  height: TRIM_TAB_H,
+                  background: 'linear-gradient(145deg, #D4FF00 0%, #9ACD00 55%, #6B8E00 100%)',
+                  border: '1px solid rgba(0,0,0,0.35)',
+                  borderRadius: 7,
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.45)',
+                  cursor: 'ew-resize',
+                  touchAction: 'none',
+                  // Above the trim tabs (z10) so the active stop's tab wins where they overlap.
+                  zIndex: 11,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 3,
+                  boxSizing: 'border-box',
+                }}
+              >
+                <span aria-hidden style={{ width: 2, height: '46%', borderRadius: 1, background: 'rgba(0,0,0,0.55)', pointerEvents: 'none' }} />
+                <span aria-hidden style={{ width: 2, height: '46%', borderRadius: 1, background: 'rgba(0,0,0,0.55)', pointerEvents: 'none' }} />
+              </div>
+            </>
+          );
+        })()}
         <div
           style={{
             position: 'absolute',

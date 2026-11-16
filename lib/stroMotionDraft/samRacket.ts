@@ -1,5 +1,8 @@
 'use client';
 
+import { PHONE_ORT_SESSION_OPTIONS, isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+import { frameToCanvas, type CanvasLike, type FrameSource } from '@/lib/stroMotionDraft/frameCanvas';
+
 /**
  * SAM 2 RACKET SEGMENTATION — the promptable segmenter behind Motion Layer's
  * racket tool.
@@ -205,12 +208,12 @@ async function getSession(): Promise<SamSession | null> {
 
       let model: any;
       try {
-        model = await Sam2Model.from_pretrained('sam2', { dtype: 'q4f16', device });
+        model = await Sam2Model.from_pretrained('sam2', { dtype: 'q4f16', device, ...(isPhoneBudgetActive() ? { session_options: PHONE_ORT_SESSION_OPTIONS } : {}) });
       } catch (e) {
         if (device === 'webgpu') {
           console.warn('[samRacket] WebGPU load failed, falling back to wasm:', e);
           device = 'wasm';
-          model = await Sam2Model.from_pretrained('sam2', { dtype: 'q4f16', device });
+          model = await Sam2Model.from_pretrained('sam2', { dtype: 'q4f16', device, ...(isPhoneBudgetActive() ? { session_options: PHONE_ORT_SESSION_OPTIONS } : {}) });
         } else {
           throw e;
         }
@@ -220,6 +223,7 @@ async function getSession(): Promise<SamSession | null> {
       return { tjs, model, processor, device } as SamSession;
     } catch (e) {
       console.warn('[samRacket] model load failed — racket tool unavailable:', e);
+      lastSamError = `model load failed: ${e instanceof Error ? e.message : String(e)}`;
       // Null out so a later attempt can retry rather than being stuck on a
       // rejected promise for the life of the tab.
       sessionPromise = null;
@@ -282,6 +286,32 @@ export function clearRacketEncodings(): void {
   console.log('[samRacket] embedding cache cleared');
 }
 
+/** Phone memory budget: drop ONE frame's embedding (16.8 MB) as soon as its decode is done. */
+export function dropRacketEncoding(key: string): void {
+  const e = encodedFrames.get(key);
+  if (!e) return;
+  disposeEmb(e.emb);
+  encodedFrames.delete(key);
+}
+
+/**
+ * Phone memory budget: drop every cached embedding AND the SAM session when the
+ * auto-racket pass ends. The next use (the editor's Object tool) loads the model
+ * and encodes the frame again (about 10 s a frame on wasm), the price of not holding
+ * the encoder and its arena for the rest of the session.
+ */
+export async function releaseSamRacket(): Promise<void> {
+  clearRacketEncodings();
+  const dead = sessionPromise;
+  sessionPromise = null;
+  loadedDevice = null;
+  try {
+    const old = await dead;
+    await old?.model?.dispose?.();
+    console.log('[samRacket] session released');
+  } catch { /* the session is being dropped either way */ }
+}
+
 function disposeEmb(emb: Record<string, any>): void {
   for (const k of Object.keys(emb)) {
     try {
@@ -315,9 +345,13 @@ function evictIfNeeded(): void {
  * Returns null when the model is unavailable — the caller treats that as "no
  * racket tool on this frame", never as an error worth aborting the batch for.
  */
+/** Why the last getSession()/encode returned null (shown to the coach: on a phone there is no console). */
+let lastSamError = '';
+export function getLastSamError(): string { return lastSamError; }
+
 export async function encodeFrameForRacket(
   key: string,
-  frame: ImageBitmap | HTMLCanvasElement,
+  frame: FrameSource,
 ): Promise<{ ms: number; bytes: number } | null> {
   const session = await getSession();
   if (!session) return null;
@@ -330,21 +364,9 @@ export async function encodeFrameForRacket(
   }
 
   // RawImage wants a canvas; an ImageBitmap is drawn once into one.
-  let canvas: HTMLCanvasElement;
-  let width: number;
-  let height: number;
-  if (frame instanceof HTMLCanvasElement) {
-    canvas = frame;
-    width = frame.width;
-    height = frame.height;
-  } else {
-    width = frame.width;
-    height = frame.height;
-    canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    canvas.getContext('2d')!.drawImage(frame, 0, 0);
-  }
+  const canvas: CanvasLike = frameToCanvas(frame);
+  const width = frame.width;
+  const height = frame.height;
 
   /**
    * One encode attempt against one session. Kept as a closure because a WebGPU
