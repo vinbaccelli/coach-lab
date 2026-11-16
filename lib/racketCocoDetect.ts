@@ -13,9 +13,10 @@ const IMPLEMENT_CLASSES = new Set(['tennis racket', 'baseball bat']);
 
 let modelPromise: Promise<import('@tensorflow-models/coco-ssd').ObjectDetection> | null = null;
 
-export function preloadRacketDetector(): void {
-  if (typeof window === 'undefined') return;
-  void getRacketDetectorModel();
+/** Starts loading the detector. Resolves when it is ready or has failed (never rejects). */
+export function preloadRacketDetector(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.resolve();
+  return getRacketDetectorModel().then(() => undefined, () => undefined);
 }
 
 async function getRacketDetectorModel(): Promise<import('@tensorflow-models/coco-ssd').ObjectDetection> {

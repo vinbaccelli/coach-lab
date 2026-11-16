@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { canUse, canDownloadEbook, FEATURES, NO_ENTITLEMENT, type Entitlement, type Feature } from '@/lib/entitlements';
 import { requireFeature } from '@/lib/entitlements.server';
+import { readFileSync } from 'node:fs';
+import { PLANS } from '@/lib/plans';
 
 const ALL = Object.keys(FEATURES) as Feature[];
 const LIGHT = ALL.filter((f) => FEATURES[f].plan === 'light');
@@ -21,11 +23,12 @@ const who = {
 
 test('feature table matches the launch decision (Light vs Pro lists)', () => {
   assert.deepEqual(LIGHT.sort(), [
-    'academy', 'aiDetect', 'angleDifferential', 'dataColumn', 'draw', 'jointChain', 'ruler', 'screenshot', 'skeleton', 'snapshot',
+    'academy', 'aiDetect', 'angleDifferential', 'dataColumn', 'draw', 'jointChain', 'players', 'ruler', 'saveToPlayer',
+    'screenshot', 'skeleton', 'snapshot',
   ]);
   assert.deepEqual(PRO.sort(), [
     'aiTrack', 'coachProfile', 'docsExport', 'generate', 'matchAnalyzer', 'matchDecoder', 'motionLayer', 'multiSnapshot',
-    'players', 'recordingHub', 'saveToPlayer', 'youtube',
+    'recordingHub', 'youtube',
   ]);
 });
 
@@ -105,14 +108,14 @@ const user = { id: 'u1', email: 'coach@example.com' };
 const active = (tier: string, interval = 'month') => ({ status: 'active', tier, billing_interval: interval, current_period_end: null, cancel_at_period_end: false });
 
 test('requireFeature: 403 plan_required for a Light coach on a Pro API', async () => {
-  const res = await requireFeature(mockSupabase({ sub: active('light') }), user, 'players');
+  const res = await requireFeature(mockSupabase({ sub: active('light') }), user, 'docsExport');
   assert.ok(res);
   assert.equal(res.status, 403);
   const body = await res.json();
   assert.equal(body.error, 'plan_required');
-  assert.equal(body.feature, 'players');
+  assert.equal(body.feature, 'docsExport');
   assert.equal(body.required, 'pro');
-  assert.match(body.message, /Player database is part of the Pro plan/);
+  assert.match(body.message, /Google Docs export is part of the Pro plan/);
 });
 
 test('requireFeature: allowed (null) for Pro, Academy, trial and admin', async () => {
@@ -150,4 +153,58 @@ test('requireFeature: a database error fails open', async () => {
   } finally {
     console.error = orig;
   }
+});
+
+// ── Light gets the player database (Vin, 2026-11-02) ───────────────────────────
+
+test('Light: the player database and saving to a player are on the Light plan', () => {
+  assert.equal(FEATURES.players.plan, 'light');
+  assert.equal(FEATURES.saveToPlayer.plan, 'light');
+  assert.equal(FEATURES.players.enforced, 'server', 'still enforced by the API, not just the UI');
+  assert.equal(canUse('players', who.light), true);
+  assert.equal(canUse('saveToPlayer', who.light), true);
+});
+
+test('Light: players and saveToPlayer APIs let an active Light coach through', async () => {
+  for (const f of ['players', 'saveToPlayer'] as const) {
+    assert.equal(await requireFeature(mockSupabase({ sub: active('light') }), user, f), null, f);
+    assert.equal(await requireFeature(mockSupabase({ sub: active('light', 'year') }), user, f), null, `${f} yearly`);
+    assert.equal(await requireFeature(mockSupabase({ sub: { ...active('light'), status: 'past_due' } }), user, f), null, `${f} past_due`);
+  }
+});
+
+test('Light: a lapsed or missing Light subscription still gets nothing on players', async () => {
+  for (const status of ['canceled', 'unpaid', 'incomplete']) {
+    const res = await requireFeature(mockSupabase({ sub: { ...active('light'), status } }), user, 'players');
+    assert.equal(res?.status, 403, status);
+  }
+  assert.equal((await requireFeature(mockSupabase({}), user, 'players'))?.status, 403);
+  assert.equal((await requireFeature(mockSupabase({}), user, 'saveToPlayer'))?.status, 403);
+});
+
+test('Light: every other Pro feature stays Pro (nothing else moved)', async () => {
+  for (const f of PRO) {
+    assert.equal(canUse(f, who.light), false, f);
+    assert.equal((await requireFeature(mockSupabase({ sub: active('light') }), user, f))?.status, 403, f);
+  }
+  for (const f of ALL) assert.equal(canUse(f, who.proMonthly), true, `pro ${f}`);
+});
+
+test('Light: the profile and the players list are editable for anyone who can use `players` (no Pro-only copy)', () => {
+  for (const file of ['components/players/PlayerProfileClient.tsx', 'components/players/PlayersHomeClient.tsx']) {
+    const src = readFileSync(file, 'utf8');
+    assert.match(src, /const canEdit = useEntitlement\(\)\.can\('players'\)/, file);
+    assert.doesNotMatch(src, /part of Pro|needs Pro/, `${file}: no Pro-only wording`);
+  }
+  const analysis = readFileSync('app/analysis/page.tsx', 'utf8');
+  assert.doesNotMatch(analysis, /Saving to a player is part of the Pro plan/);
+});
+
+test('Light: plan lists show the player database on Light only (Pro says "Everything in Light")', () => {
+  const light = PLANS.find((p) => p.id === 'light')!;
+  const pro = PLANS.find((p) => p.id === 'pro')!;
+  const line = 'Player database, and saving to a player from the analysis screen';
+  assert.ok(light.features.includes(line));
+  assert.ok(!pro.features.includes(line));
+  assert.equal(pro.features[0], 'Everything in Light');
 });

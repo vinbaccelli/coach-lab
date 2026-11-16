@@ -6,13 +6,26 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import PlayerSessionTimeline from '@/components/players/PlayerSessionTimeline';
 import PlayerNav from '@/components/reports/PlayerNav';
+import PlayerTimeline from '@/components/players/PlayerTimeline';
+import PlayerShareCard from '@/components/players/PlayerShareCard';
+import TrackerSection from '@/components/players/trackers/TrackerSection';
+import ProfileTabs, { isProfileTab, type ProfileTab } from '@/components/players/ProfileTabs';
+import PlayerAvatar from '@/components/players/PlayerAvatar';
+import EditableLabel from '@/components/players/EditableLabel';
+import ReviewQueue from '@/components/players/ReviewQueue';
+import type { Tracker, TrackerEntry } from '@/lib/players/trackers';
+import type { MealLog } from '@/lib/players/nutrition';
+import NutritionSection from '@/components/players/nutrition/NutritionSection';
+import { coachNutritionClient } from '@/components/players/nutrition/nutritionClient';
 import DeletePlayerSection from '@/components/players/DeletePlayerSection';
 import { createPlayerDraftSession } from '@/lib/sessions/saveSession';
 import type { PlayerSession } from '@/lib/sessions/types';
 import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
-import { parseTechnicalSheet, defaultTechnicalSheet, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
+import { parseTechnicalSheet, defaultTechnicalSheet, migrateOldDefault, resetToStandard, needsReset, labelTaken, makeRow, addTrackEntry, removeTrackEntry, entriesNewestFirst, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
+import ReorderList from '@/components/players/ReorderList';
+import { parseOrder } from '@/lib/players/reorder';
 
 type Player = {
   id: string;
@@ -30,6 +43,10 @@ type Player = {
   google_folder_id?: string | null;
   /** Editable Technical Sheet rows (jsonb). */
   technical_sheet?: unknown;
+  /** Extra profile rows (name/value) — null until the coach adds one. */
+  profile_fields?: unknown;
+  /** Manual timeline order (list of item keys) — null = newest first. */
+  timeline_order?: unknown;
 };
 
 type Entry = {
@@ -53,30 +70,72 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const [entries, setEntries] = useState<Entry[]>([]);
   const [sessions, setSessions] = useState<PlayerSession[]>([]);
   const [loading, setLoading] = useState(true);
+  // Which section is open; kept in the URL (?tab=) so a reload or a shared link opens the same one.
+  const [tab, setTabState] = useState<ProfileTab>('overview');
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (isProfileTab(t)) setTabState(t);
+  }, []);
+  // Player submissions waiting for the coach (share link): shown on Overview, counted on its tab.
+  const [review, setReview] = useState<{ entries: TrackerEntry[]; trackers: Tracker[]; meals: MealLog[] }>({ entries: [], trackers: [], meals: [] });
+  const loadReview = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/players/${playerId}/review`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      setReview({ entries: data.entries ?? [], trackers: data.trackers ?? [], meals: data.meals ?? [] });
+    } catch { /* the queue is optional */ }
+  }, [playerId]);
+  useEffect(() => { void loadReview(); }, [loadReview]);
+  const setTab = useCallback((t: ProfileTab) => {
+    setTabState(t);
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set('tab', t);
+      window.history.replaceState(window.history.state, '', u.toString());
+    } catch { /* ignore */ }
+  }, []);
   const [err, setErr] = useState<string | null>(null);
-  // Without Pro the profile stays readable; edits are server-gated (403 plan_required).
+  // Without an active plan the profile stays readable; edits are server-gated (403 plan_required).
   const canEdit = useEntitlement().can('players');
+  const nutritionClient = useMemo(() => coachNutritionClient(playerId, canEdit), [playerId, canEdit]);
   const [saving, setSaving] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
   const [sheet, setSheet] = useState<TechnicalSheetRow[] | null>(null);
   const [sheetSaving, setSheetSaving] = useState(false);
+  // Extra profile rows (Nationality, …). Seeded once from the old Nationality / Playing hand columns.
+  const [profileRows, setProfileRows] = useState<TechnicalSheetRow[] | null>(null);
+  const [profileDirty, setProfileDirty] = useState(false);
+  const [newProfileLabel, setNewProfileLabel] = useState<string | null>(null);
   const [newRowLabel, setNewRowLabel] = useState<string | null>(null);
+  const [newRowKind, setNewRowKind] = useState<'text' | 'track'>('text');
+  // Draft of the next dated comment, per tracking row (keyed by row label).
+  const [trackDraft, setTrackDraft] = useState<Record<string, { date: string; text: string }>>({});
 
   // Initialize the sheet once from the loaded player (don't clobber edits on reloads).
   useEffect(() => {
-    if (player && sheet === null) {
-      setSheet(parseTechnicalSheet(player.technical_sheet) ?? defaultTechnicalSheet());
+    if (player && profileRows === null) {
+      const saved = parseTechnicalSheet(player.profile_fields);
+      if (saved) setProfileRows(saved);
+      else {
+        const seeded: TechnicalSheetRow[] = [];
+        if (player.nationality?.trim()) seeded.push({ label: 'Nationality', value: player.nationality });
+        if (player.playing_hand && player.playing_hand !== 'unknown') seeded.push({ label: 'Playing hand', value: player.playing_hand });
+        setProfileRows(seeded);
+      }
     }
-  }, [player, sheet]);
+  }, [player, profileRows]);
 
-  /** Structural row changes update the coach's default template for NEW players. */
-  const syncTemplate = useCallback((rows: TechnicalSheetRow[]) => {
-    void fetch('/api/coach-settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ technicalSheetTemplate: rows.map((r) => r.label) }),
-    }).catch(() => {});
-  }, []);
+  useEffect(() => {
+    if (player && sheet === null) {
+      const parsed = parseTechnicalSheet(player.technical_sheet);
+      const rows = parsed ? migrateOldDefault(parsed) : defaultTechnicalSheet();
+      setSheet(rows);
+      // An untouched old default sheet was replaced by the standard rows: save that once.
+      if (parsed && rows !== parsed && canEdit) void saveSheet(rows);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player, sheet]);
 
   const saveSheet = useCallback(async (rows: TechnicalSheetRow[]) => {
     setSheetSaving(true);
@@ -98,6 +157,23 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       setSheetSaving(false);
     }
   }, [playerId]);
+
+  const sameLabel = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  const renameSheetRow = (i: number, next: string): string | null => {
+    if (!sheet) return null;
+    if (sheet.some((r, j) => j !== i && sameLabel(r.label, next))) return 'There is already a row with that name';
+    const rows = sheet.map((r, j) => (j === i ? { ...r, label: next } : r));
+    setSheet(rows);
+    void saveSheet(rows);
+    return null;
+  };
+  const renameProfileRow = (i: number, next: string): string | null => {
+    const rows = profileRows ?? [];
+    if (rows.some((r, j) => j !== i && sameLabel(r.label, next))) return 'There is already a row with that name';
+    setProfileRows(rows.map((r, j) => (j === i ? { ...r, label: next } : r)));
+    setProfileDirty(true);
+    return null;
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -174,17 +250,21 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          display_name: player.display_name,
+          display_name: player.display_name.trim() || 'Player',
           photo_url: player.photo_url || null,
           date_of_birth: player.date_of_birth || null,
-          nationality: player.nationality || null,
+          // Keep the Players list's nationality line in step with the "Nationality" row (if any).
+          nationality: profileRows?.find((r) => r.label.trim().toLowerCase() === 'nationality')?.value.trim() || player.nationality || null,
           playing_hand: player.playing_hand || 'unknown',
           notes: player.notes || null,
+          // Only sent once the coach changed the rows (so an unapplied migration cannot break a plain save).
+          ...(profileDirty && profileRows ? { profile_fields: profileRows } : {}),
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message ?? data.error ?? 'Save failed');
       setPlayer(data.player);
+      setProfileDirty(false);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Save failed');
     } finally {
@@ -256,7 +336,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
 
       {!canEdit ? (
         <PlanLockedNotice feature="players">
-          The player database is part of Pro. This profile stays readable; editing it needs Pro.
+          Editing a player needs an active plan. This profile stays readable.
         </PlanLockedNotice>
       ) : null}
 
@@ -278,8 +358,31 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </div>
       ) : null}
 
+      <ProfileTabs value={tab} onChange={(t) => { setTab(t); void loadReview(); }} badges={{ overview: review.entries.length + review.meals.length }} />
+
+      {tab === 'overview' ? <ReviewQueue playerId={playerId} entries={review.entries} trackers={review.trackers} meals={review.meals} onChanged={() => void loadReview()} onOpenNutrition={() => setTab('nutrition')} /> : null}
+
+      {tab === 'overview' ? (
       <div style={{ ...panel, marginBottom: 18 }}>
-        <h1 data-tour-id="player-profile" style={{ margin: '0 0 14px', fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em' }}>{player.display_name}</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+          <PlayerAvatar
+            playerId={playerId}
+            name={player.display_name}
+            photoUrl={player.photo_url}
+            canEdit={canEdit}
+            onChange={(url) => setPlayer((prev) => (prev ? { ...prev, photo_url: url } : prev))}
+          />
+          <h1 data-tour-id="player-profile" style={{ margin: 0, fontSize: 22, fontWeight: 900, letterSpacing: '-0.03em' }}>{player.display_name}</h1>
+        </div>
+        <label style={{ ...lb, marginBottom: 12 }}>
+          Name
+          <input
+            value={player.display_name}
+            onChange={(e) => setPlayer({ ...player, display_name: e.target.value })}
+            style={inp}
+            maxLength={120}
+          />
+        </label>
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
           <label style={lb}>
             Photo URL
@@ -299,27 +402,99 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
               style={inp}
             />
           </label>
-          <label style={lb}>
-            Nationality
-            <input
-              value={player.nationality ?? ''}
-              onChange={(e) => setPlayer({ ...player, nationality: e.target.value })}
-              style={inp}
-            />
-          </label>
-          <label style={lb}>
-            Playing hand
-            <select
-              value={player.playing_hand ?? 'unknown'}
-              onChange={(e) => setPlayer({ ...player, playing_hand: e.target.value })}
-              style={inp}
-            >
-              <option value="unknown">Unknown</option>
-              <option value="right">Right</option>
-              <option value="left">Left</option>
-            </select>
-          </label>
         </div>
+        <ReorderList
+          items={profileRows ?? []}
+          getKey={(r) => r.label}
+          disabled={!canEdit}
+          onReorder={(next) => { setProfileRows(next); setProfileDirty(true); }}
+          containerStyle={{ display: 'grid', gap: 10, marginTop: 12 }}
+          renderItem={(row, i, handle) => (
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4 }}>
+              {handle}
+              <label style={{ ...lb, flex: 1 }}>
+                <EditableLabel label={row.label} canEdit={canEdit} onRename={(n) => renameProfileRow(i, n)} />
+                <input
+                  value={row.value}
+                  onChange={(e) => { setProfileRows((prev) => prev ? prev.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)) : prev); setProfileDirty(true); }}
+                  style={inp}
+                />
+              </label>
+              <button
+                type="button"
+                aria-label={`Delete ${row.label} row`}
+                onClick={() => {
+                  if (!window.confirm(`Delete the "${row.label}" row?`)) return;
+                  setProfileRows((prev) => (prev ? prev.filter((_, j) => j !== i) : prev));
+                  setProfileDirty(true);
+                }}
+                style={{ width: 30, height: 34, borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-muted)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+        />
+        {canEdit ? (
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {newProfileLabel === null ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setNewProfileLabel('')}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed var(--cl-accent)', background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                >
+                  <Plus size={14} /> Add row
+                </button>
+                {!(profileRows ?? []).some((r) => r.label.trim().toLowerCase() === 'nationality') ? (
+                  <button
+                    type="button"
+                    onClick={() => { setProfileRows((prev) => [...(prev ?? []), { label: 'Nationality', value: '' }]); setProfileDirty(true); }}
+                    style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}
+                  >
+                    + Nationality
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <input
+                  value={newProfileLabel}
+                  onChange={(e) => setNewProfileLabel(e.target.value)}
+                  placeholder="Row name"
+                  autoFocus
+                  style={{ ...inp, maxWidth: 260 }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && newProfileLabel.trim()) {
+                      setProfileRows((prev) => [...(prev ?? []), { label: newProfileLabel.trim(), value: '' }]);
+                      setProfileDirty(true);
+                      setNewProfileLabel(null);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={!newProfileLabel.trim()}
+                  onClick={() => {
+                    setProfileRows((prev) => [...(prev ?? []), { label: newProfileLabel.trim(), value: '' }]);
+                    setProfileDirty(true);
+                    setNewProfileLabel(null);
+                  }}
+                  style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewProfileLabel(null)}
+                  style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
+        ) : null}
         <label style={{ ...lb, marginTop: 14 }}>
           Coach notes
           <textarea
@@ -347,8 +522,10 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           {saving ? 'Saving…' : 'Save profile'}
         </button>
       </div>
+      ) : null}
 
       {/* ── Technical Sheet ─────────────────────────────────────────────── */}
+      {tab === 'technical' ? (
       <div style={{ ...panel, marginBottom: 18 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0, fontSize: 15, fontWeight: 800, letterSpacing: '-0.02em' }}>Technical Sheet</h2>
@@ -360,32 +537,111 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           >
             {sheetSaving ? 'Saving…' : 'Save sheet'}
           </button>
+          {canEdit && sheet && needsReset(sheet) ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (!window.confirm('Reset to the standard rows (Forehand, Backhand, Serve, Volley, Footwork)?\n\nRows that have something typed in are kept; empty rows are removed.')) return;
+                const next = resetToStandard(sheet, new Date().toISOString().slice(0, 10), () => crypto.randomUUID());
+                setSheet(next);
+                void saveSheet(next);
+              }}
+              style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+            >
+              Reset to standard rows
+            </button>
+          ) : null}
         </div>
         <p style={{ margin: '4px 0 14px', fontSize: 12, color: 'var(--cl-text-secondary)' }}>
-          Adding or deleting rows also updates your default sheet for new players — existing players keep their rows.
+          Rows you add or delete here only change this player.
         </p>
-        <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}>
-          {(sheet ?? []).map((row, i) => (
-            <div key={`${row.label}-${i}`} style={{ display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+        <ReorderList
+          items={sheet ?? []}
+          getKey={(r) => r.label}
+          disabled={!canEdit}
+          onReorder={(next) => { setSheet(next); void saveSheet(next); }}
+          containerStyle={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}
+          itemStyle={(r) => (r.kind === 'track' ? { gridColumn: '1 / -1' } : undefined)}
+          renderItem={(row, i, handle) => (
+            <div style={{ display: 'flex', alignItems: row.kind === 'track' ? 'flex-start' : 'flex-end', gap: 4 }}>
+              {handle}
+              {row.kind === 'track' ? (
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, margin: '6px 0 6px' }}><EditableLabel label={row.label} canEdit={canEdit} onRename={(n) => renameSheetRow(i, n)} suffix={<span style={{ fontWeight: 500, color: 'var(--cl-text-muted)', fontSize: 11 }}>· progress tracking</span>} /></div>
+                  {entriesNewestFirst(row).map((en) => (
+                    <div key={en.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 0', borderTop: '1px solid var(--cl-border)' }}>
+                      <span style={{ fontSize: 12, color: 'var(--cl-text-muted)', whiteSpace: 'nowrap', paddingTop: 1 }}>{en.date}</span>
+                      <span style={{ fontSize: 13, whiteSpace: 'pre-wrap', flex: 1, minWidth: 0 }}>{en.text}</span>
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          aria-label="Delete this entry"
+                          onClick={() => {
+                            if (!window.confirm('Delete this entry?')) return;
+                            setSheet((prev) => {
+                              if (!prev) return prev;
+                              const next = prev.map((r, j) => (j === i ? removeTrackEntry(r, en.id) : r));
+                              void saveSheet(next);
+                              return next;
+                            });
+                          }}
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, color: 'var(--cl-text-muted)', display: 'inline-flex' }}
+                        >
+                          <X size={14} />
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                  {canEdit ? (() => {
+                    const draft = trackDraft[row.label] ?? { date: new Date().toISOString().slice(0, 10), text: '' };
+                    return (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6, alignItems: 'flex-start' }}>
+                        <input type="date" value={draft.date} onChange={(e) => setTrackDraft((d) => ({ ...d, [row.label]: { ...draft, date: e.target.value } }))} style={{ ...inp, width: 150 }} />
+                        <textarea
+                          rows={2}
+                          value={draft.text}
+                          placeholder={`What changed in the ${row.label.toLowerCase()}?`}
+                          onChange={(e) => setTrackDraft((d) => ({ ...d, [row.label]: { ...draft, text: e.target.value } }))}
+                          style={{ ...inp, flex: '1 1 200px', resize: 'vertical' }}
+                        />
+                        <button
+                          type="button"
+                          disabled={!draft.text.trim()}
+                          onClick={() => {
+                            setSheet((prev) => {
+                              if (!prev) return prev;
+                              const next = prev.map((r, j) => (j === i ? addTrackEntry(r, draft.date, draft.text, crypto.randomUUID()) : r));
+                              void saveSheet(next);
+                              return next;
+                            });
+                            setTrackDraft((d) => ({ ...d, [row.label]: { date: draft.date, text: '' } }));
+                          }}
+                          style={{ padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                        >
+                          Add entry
+                        </button>
+                      </div>
+                    );
+                  })() : null}
+                </div>
+              ) : (
               <label style={{ ...lb, flex: 1 }}>
-                {row.label}
+                <EditableLabel label={row.label} canEdit={canEdit} onRename={(n) => renameSheetRow(i, n)} />
                 <input
                   value={row.value}
                   onChange={(e) => setSheet((prev) => prev ? prev.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)) : prev)}
                   style={inp}
                 />
               </label>
+              )}
               <button
                 type="button"
                 aria-label={`Delete ${row.label} row`}
                 onClick={() => {
-                  // Destructive AND global: this also removes the row from the
-                  // coach's default sheet for all future players. Confirm first.
-                  if (!window.confirm(`Delete the "${row.label}" row?\n\nThis also removes it from your default technical sheet for new players (existing players keep their rows).`)) return;
+                  if (!window.confirm(`Delete the "${row.label}" row${row.kind === 'track' && (row.entries?.length ?? 0) > 0 ? ' and its entries' : ''}?`)) return;
                   setSheet((prev) => {
                     if (!prev) return prev;
                     const next = prev.filter((_, j) => j !== i);
-                    syncTemplate(next);
                     void saveSheet(next);
                     return next;
                   });
@@ -395,31 +651,48 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 <X size={14} />
               </button>
             </div>
-          ))}
-        </div>
+          )}
+        />
+        {canEdit ? (
+          <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: 'var(--cl-text-muted)' }}>Track more:</span>
+            <button type="button" onClick={() => setTab('biometrics')} style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}>+ Biometrics</button>
+            <button type="button" onClick={() => setTab('fitness')} style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}>+ Fitness tracker</button>
+            <button type="button" onClick={() => setTab('progress')} style={{ padding: '5px 10px', borderRadius: 999, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 12, cursor: 'pointer' }}>+ Custom tracker</button>
+          </div>
+        ) : null}
         <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {newRowLabel === null ? (
-            <button
-              type="button"
-              onClick={() => setNewRowLabel('')}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed var(--cl-accent)', background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-            >
-              <Plus size={14} /> Add row
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => { setNewRowKind('text'); setNewRowLabel(''); }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed var(--cl-accent)', background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+              >
+                <Plus size={14} /> Add row
+              </button>
+              <button
+                type="button"
+                onClick={() => { setNewRowKind('track'); setNewRowLabel(''); }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px dashed var(--cl-accent)', background: 'rgba(0,122,255,0.04)', color: 'var(--cl-accent)', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+              >
+                <Plus size={14} /> Add progress tracking row
+              </button>
+            </>
           ) : (
             <>
               <input
                 value={newRowLabel}
                 onChange={(e) => setNewRowLabel(e.target.value)}
-                placeholder="Row name (e.g. Serve speed)"
+                placeholder={newRowKind === 'track' ? 'Tracking row name (e.g. Return of serve)' : 'Row name (e.g. Serve speed)'}
                 autoFocus
                 style={{ ...inp, maxWidth: 260 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && newRowLabel.trim()) {
+                    if (labelTaken(sheet ?? [], newRowLabel)) { window.alert('There is already a row with that name.'); return; }
                     setSheet((prev) => {
-                      const next = [...(prev ?? []), { label: newRowLabel.trim(), value: '' }];
-                      syncTemplate(next);
-                      void saveSheet(next);
+                      const next = [...(prev ?? []), makeRow(newRowLabel.trim(), newRowKind)];
+                        void saveSheet(next);
                       return next;
                     });
                     setNewRowLabel(null);
@@ -430,9 +703,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
                 type="button"
                 disabled={!newRowLabel.trim()}
                 onClick={() => {
+                  if (labelTaken(sheet ?? [], newRowLabel)) { window.alert('There is already a row with that name.'); return; }
                   setSheet((prev) => {
-                    const next = [...(prev ?? []), { label: newRowLabel.trim(), value: '' }];
-                    syncTemplate(next);
+                    const next = [...(prev ?? []), makeRow(newRowLabel.trim(), newRowKind)];
                     void saveSheet(next);
                     return next;
                   });
@@ -453,7 +726,30 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
           )}
         </div>
       </div>
+      ) : null}
 
+      {tab === 'progress' ? <TrackerSection playerId={playerId} category="progress" canEdit={canEdit} /> : null}
+      {tab === 'biometrics' ? <TrackerSection playerId={playerId} category="biometrics" canEdit={canEdit} /> : null}
+      {tab === 'fitness' ? <TrackerSection playerId={playerId} category="fitness" canEdit={canEdit} /> : null}
+      {tab === 'nutrition' ? <NutritionSection client={nutritionClient} /> : null}
+
+      {tab === 'timeline' ? (
+      <PlayerTimeline
+        playerId={playerId}
+        playerName={player.display_name}
+        canEdit={canEdit}
+        order={parseOrder(player.timeline_order)}
+        onOrderChange={async (order) => {
+          const res = await fetch(`/api/players/${playerId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ timeline_order: order }) });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.message ?? data.error ?? 'Could not save the order (has the database update been run?)');
+          setPlayer((prev) => (prev ? { ...prev, timeline_order: order } : prev));
+        }}
+      />
+      ) : null}
+      {tab === 'overview' ? <PlayerShareCard playerId={playerId} canEdit={canEdit} /> : null}
+
+      {tab === 'technical' ? (<>
       {/* V2: the "Analysis Sessions" block is hidden while REPORTS_IN_APP is on — reports are
           the player's record now, and a coach saves to any player from the analysis app
           without a session. The code (and player_sessions, its routes and pages) is kept:
@@ -766,7 +1062,9 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
         </section>
       )}
       {/* Danger zone: REPORTS_IN_APP only, deliberately not plan-gated, last on the page. */}
-      {REPORTS_IN_APP ? <DeletePlayerSection playerId={playerId} playerName={player.display_name} /> : null}
+      </>) : null}
+
+      {tab === 'overview' && REPORTS_IN_APP ? <DeletePlayerSection playerId={playerId} playerName={player.display_name} /> : null}
     </div>
   );
 }
@@ -783,7 +1081,7 @@ const inp: React.CSSProperties = {
   borderRadius: 10,
   border: '1px solid var(--cl-border)',
   padding: '10px 12px',
-  fontSize: 14,
+  fontSize: 16, // 16px+ stops iPhones zooming the page when a field is tapped
   width: '100%',
   boxSizing: 'border-box',
 };
