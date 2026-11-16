@@ -3,12 +3,14 @@
 /** The sections of a player profile. One scrollable row of tabs; the choice is kept in the URL (?tab=). */
 export const PROFILE_TABS = [
   { id: 'overview', label: 'Overview' },
+  // Second on purpose: it holds the daily add controls (comment, picture, YouTube, link) and on a phone only
+  // the first four tabs are visible without swiping (KNOWN_ISSUES 084).
+  { id: 'timeline', label: 'Timeline' },
   { id: 'technical', label: 'Technical' },
   { id: 'progress', label: 'Progress' },
   { id: 'biometrics', label: 'Biometrics' },
   { id: 'fitness', label: 'Fitness' },
   { id: 'nutrition', label: 'Nutrition' },
-  { id: 'timeline', label: 'Timeline' },
 ] as const;
 export type ProfileTab = (typeof PROFILE_TABS)[number]['id'];
 
