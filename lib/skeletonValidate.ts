@@ -5,6 +5,10 @@
  * snapping to the background), and smoothing a wrong joint just makes it drift
  * ("drunk" skeleton). So we judge every joint on evidence, never on the box:
  *
+ *  0. LIMB ASSIGNMENT   — inside each frame, a knee/ankle/elbow/wrist whose bone to its own
+ *     hip/knee/shoulder/elbow is longer than any real limb of the clip (and shorter the other way
+ *     round) belongs to the other side: swapped back. Needs no history, so a swap that lasts the
+ *     whole clip (shin lines in an X) is repaired too.
  *  1. L/R SWAP REPAIR   — a left/right pair whose labels jumped to the other
  *     side's previous position is swapped back (compared with the previous
  *     OUTPUT frame, so a swap that persists is repaired consistently).
@@ -23,6 +27,11 @@ import type { TrackSample, TrackKeypoint } from './trackSmoothing';
 
 export const MIN_SCORE = 0.2;
 export const INVALID_SCORE = 0.05;
+const LIMB_PLAUSIBLE = 1.35;     // step 0: labelled bones longer than this × the clip's best-assignment length are impossible
+const LIMB_VS_PARENT = 1.4;      // step 0, ankle/wrist: labelled shins/forearms longer than this × the thighs/upper arms of the same frame are impossible
+const LIMB_SWAP_RATIO = 0.7;    // …and the other assignment must be this much shorter
+const LIMB_MIN_GAIN_BH = 0.08;   // …saving at least this many body heights
+const LIMB_REF_HALF = 15;        // samples each side for the rolling reference length
 const SWAP_RATIO = 0.6;          // swapped assignment must be this much cheaper
 const SWAP_MIN_SEP = 0.08;       // L/R must be ≥ this many body heights apart (else crossing, not a swap)
 const SWAP_MIN_MOVE = 0.04;      // …and the unswapped step must be a real move
@@ -83,6 +92,70 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
   if (hs.length < 4) return { samples, report, dropped: noDrops() };
   const BH = median(hs);
   if (!(BH > 20)) return { samples, report, dropped: noDrops() };
+
+  // ── 0. LIMB ASSIGNMENT INSIDE THE FRAME (knee, ankle, elbow, wrist) ─────
+  // Step 1 below compares a frame with the previous one, so a swap that is already there at the
+  // first frame, or that lasts the whole clip, never "jumps" and was kept: the skeleton showed
+  // each knee joined to the OPPOSITE ankle (shin lines in an X), each elbow to the opposite
+  // wrist. The bone-length check (step 4) cannot see it either: the neighbours carry the same swap.
+  // So every joint is also judged by anatomy alone, no history needed. For a chain (hip→knee,
+  // knee→ankle, shoulder→elbow, elbow→wrist) there are two ways to hand the left/right joints to
+  // the left/right parents. The labelled way is rejected only when it is physically impossible AND
+  // the other way is clearly shorter; a genuine crossover step or folded arms keep real bone
+  // lengths and are never touched. "Impossible" needs a ruler that a swap cannot bias:
+  //  · ankle and wrist: the bone just above it IN THE SAME FRAME (thigh, upper arm). A real shin or
+  //    forearm is about as long as that; a swapped one runs across the body at about twice it.
+  //    (A clip-wide reference would be biased low whenever the limbs are crossed on every frame.)
+  //  · knee and elbow (next to the root, rarely crossed): 1.35 × a rolling median of the clip's
+  //    best-assignment length, so zoom and approach are tolerated.
+  // Parents are settled first (hips/shoulders are the roots), then knee → ankle, elbow → wrist.
+  const SIDES = (n: string) => [`left_${n}`, `right_${n}`] as const;
+  type Chain = { j: readonly [string, string]; p: readonly [string, string]; ruler?: readonly [string, string] };
+  const CHAINS: ReadonlyArray<Chain> = [
+    { j: SIDES('knee'), p: SIDES('hip') },
+    { j: SIDES('ankle'), p: SIDES('knee'), ruler: SIDES('hip') },
+    { j: SIDES('elbow'), p: SIDES('shoulder') },
+    { j: SIDES('wrist'), p: SIDES('elbow'), ruler: SIDES('shoulder') },
+  ];
+  for (const { j: [jl, jr], p: [pl, pr], ruler } of CHAINS) {
+    const keepT: Array<number | null> = new Array(out.length).fill(null);
+    const swapT: Array<number | null> = new Array(out.length).fill(null);
+    const rulerT: Array<number | null> = new Array(out.length).fill(null);
+    for (let i = 0; i < out.length; i++) {
+      const a = idx[i].get(pl), b = idx[i].get(pr), c = idx[i].get(jl), e = idx[i].get(jr);
+      if (!a || !b || !c || !e || a.score < 0.3 || b.score < 0.3 || c.score < 0.3 || e.score < 0.3) continue;
+      keepT[i] = d(a, c) + d(b, e);
+      swapT[i] = d(a, e) + d(b, c);
+      if (ruler) {
+        const ga = idx[i].get(ruler[0]), gb = idx[i].get(ruler[1]);
+        if (ga && gb && ga.score >= 0.3 && gb.score >= 0.3) rulerT[i] = d(ga, a) + d(gb, b);
+      }
+    }
+    const best: number[] = [];
+    keepT.forEach((k, i) => { if (k != null) best.push(Math.min(k, swapT[i]!)); });
+    if (best.length < 4) continue;
+    const globalRef = median(best);
+    for (let i = 0; i < out.length; i++) {
+      const keep = keepT[i], swp = swapT[i];
+      if (keep == null || swp == null || swp >= keep) continue;
+      let limit: number;
+      if (ruler) {
+        if (rulerT[i] == null) continue;
+        limit = rulerT[i]! * LIMB_VS_PARENT;
+      } else {
+        const win: number[] = [];
+        for (let j = Math.max(0, i - LIMB_REF_HALF); j <= Math.min(out.length - 1, i + LIMB_REF_HALF); j++) if (keepT[j] != null) win.push(Math.min(keepT[j]!, swapT[j]!));
+        limit = (win.length >= 4 ? median(win) : globalRef) * LIMB_PLAUSIBLE;
+      }
+      if (keep <= limit) continue;                           // a real limb could be this long: leave it
+      if (!(swp < keep * LIMB_SWAP_RATIO && (keep - swp) / BH > LIMB_MIN_GAIN_BH)) continue;
+      const cj = idx[i].get(jl)!, rj = idx[i].get(jr)!;
+      const t = { x: cj.x, y: cj.y, score: cj.score };
+      cj.x = rj.x; cj.y = rj.y; cj.score = rj.score;
+      rj.x = t.x; rj.y = t.y; rj.score = t.score;
+      report.swapsFixed++;
+    }
+  }
 
   // ── 1. L/R swaps, greedy against the previous output frame ──────────────
   for (let i = 1; i < out.length; i++) {
