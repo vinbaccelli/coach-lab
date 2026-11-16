@@ -13,6 +13,7 @@ import NutritionSection from '@/components/players/nutrition/NutritionSection';
 import HistoryFeed, { type HistoryPage } from '@/components/players/history/HistoryFeed';
 import { HISTORY_SECTIONS } from '@/lib/players/history';
 import { playerNutritionClient } from '@/components/players/nutrition/nutritionClient';
+import ProfileTabs, { isProfileTab, type ProfileTab } from '@/components/players/ProfileTabs';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
 type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null; trackers?: Tracker[]; trackerEntries?: TrackerEntry[]; trackersAvailable?: boolean; permissions?: SharePermissions };
@@ -52,6 +53,9 @@ export default function SharedProfileClient({ token }: { token: string }) {
   const [mDate, setMDate] = useState(today());
   const picRef = useRef<HTMLInputElement>(null);
   const vidRef = useRef<HTMLInputElement>(null);
+  // The same tabs as the coach's profile; the link's page shows only the ones it may see (kept in ?tab=).
+  const [tab, setTab] = useState<ProfileTab>('overview');
+  useEffect(() => { const t = new URLSearchParams(window.location.search).get('tab'); if (isProfileTab(t)) setTab(t); }, []);
 
   const headers = useCallback((): Record<string, string> => (email.trim() ? { 'x-share-email': email.trim() } : {}), [email]);
   const nutritionClient = useMemo(() => playerNutritionClient(token, headers), [token, headers]);
@@ -123,6 +127,23 @@ export default function SharedProfileClient({ token }: { token: string }) {
     );
   }
 
+  // Which tabs this link shows: what it may see AND has something to show or can add to.
+  const perms = data.permissions;
+  const hasTrackers = (cat: string) => (data.trackers ?? []).some((t) => t.category === cat);
+  const mayAdd = (k: 'progress' | 'biometrics' | 'fitness') => Boolean(data.canAdd && (can?.[k] ?? true));
+  const availTabs: ProfileTab[] = ['overview'];
+  if (perms?.see.timeline ?? true) availTabs.push('timeline');
+  if ((perms?.see.technical ?? true) && data.sheet.length > 0) availTabs.push('technical');
+  if ((perms?.see.progress ?? true) && (hasTrackers('progress') || series.length > 0 || mayAdd('progress'))) availTabs.push('progress');
+  if ((perms?.see.biometrics ?? true) && hasTrackers('biometrics')) availTabs.push('biometrics');
+  if ((perms?.see.fitness ?? true) && hasTrackers('fitness')) availTabs.push('fitness');
+  if (perms?.see.nutrition) availTabs.push('nutrition');
+  const activeTab: ProfileTab = availTabs.includes(tab) ? tab : 'overview';
+  const changeTab = (t: ProfileTab) => { setTab(t); try { const u = new URL(window.location.href); u.searchParams.set('tab', t); window.history.replaceState(null, '', u.toString()); } catch { /* the tab still changes */ } };
+  const myEntries = (data.trackerEntries ?? []).filter((e) => e.author === 'link');
+  const waiting = myEntries.filter((e) => e.status === 'submitted').length;
+  const approved = myEntries.filter((e) => e.status === 'approved').length;
+
   return (
     <div style={{ maxWidth: 760, margin: '0 auto', padding: '20px 16px 48px', color: 'var(--cl-text-primary)' }}>
       <h1 style={{ fontSize: 22, margin: '0 0 14px' }}>{data.name}</h1>
@@ -134,9 +155,25 @@ export default function SharedProfileClient({ token }: { token: string }) {
         </div>
       ) : null}
 
-      {data.sheet.length > 0 ? (
+      <ProfileTabs value={activeTab} onChange={changeTab} only={availTabs} badges={{ overview: toFix }} />
+
+      {activeTab === 'overview' ? (
+        <div style={panel} data-testid="share-overview">
+          <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Overview</h2>
+          <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--cl-text-secondary)' }}>
+            {data.canAdd ? 'This is your page: add what your coach asked for in the tabs above. Everything you send goes to your coach.' : 'This is your page, shared by your coach. Use the tabs above to look through it.'}
+          </p>
+          {data.canAdd ? (
+            <div style={{ fontSize: 13 }}>
+              {myEntries.length === 0 ? 'Nothing sent yet.' : `Sent by you: ${myEntries.length} · waiting for your coach: ${waiting} · approved: ${approved}${toFix ? ` · needs a fix: ${toFix}` : ''}`}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {activeTab === 'technical' && data.sheet.length > 0 ? (
         <div style={panel}>
-          <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Profile</h2>
+          <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Technical</h2>
           <div style={{ display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
             {data.sheet.map((r, i) => (
               r.kind === 'track' ? (
@@ -161,6 +198,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
       ) : null}
 
       {(['progress', 'biometrics', 'fitness'] as const).map((cat) => {
+        if (activeTab !== cat) return null;
         const list = (data.trackers ?? []).filter((t) => t.category === cat);
         if (!list.length) return null;
         return (
@@ -175,7 +213,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
         );
       })}
 
-      {(series.length > 0 || (data.canAdd && (can?.progress ?? true))) ? (
+      {activeTab === 'progress' && (series.length > 0 || (data.canAdd && (can?.progress ?? true))) ? (
         <div style={panel}>
           <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>{data.trackersAvailable ? 'Send a value to your coach' : 'Progress'}</h2>
           {series.map((s) => (
@@ -204,9 +242,9 @@ export default function SharedProfileClient({ token }: { token: string }) {
         </div>
       ) : null}
 
-      {data.permissions?.see.nutrition ? <NutritionSection client={nutritionClient} /> : null}
+      {activeTab === 'nutrition' && data.permissions?.see.nutrition ? <NutritionSection client={nutritionClient} /> : null}
 
-      {(data.permissions?.see.timeline ?? true) ? (
+      {activeTab === 'timeline' && (data.permissions?.see.timeline ?? true) ? (
       <div style={panel}>
         <h2 style={{ margin: '0 0 8px', fontSize: 15 }}>Timeline</h2>
         {data.canAdd && (can?.comments || can?.pictures || can?.videos || !can) ? (

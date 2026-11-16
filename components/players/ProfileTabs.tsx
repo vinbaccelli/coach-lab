@@ -14,13 +14,16 @@ export const PROFILE_TABS = [
 ] as const;
 export type ProfileTab = (typeof PROFILE_TABS)[number]['id'];
 
+/** The tabs to show: all of them, or only these (the client's link shows what that link may see). Order is always the profile's. */
+export const visibleTabs = (only?: readonly ProfileTab[]) => (only ? PROFILE_TABS.filter((t) => only.includes(t.id)) : PROFILE_TABS);
+
 export const isProfileTab = (v: string | null | undefined): v is ProfileTab => PROFILE_TABS.some((t) => t.id === v);
 
-export default function ProfileTabs({ value, onChange, badges = {} }: { value: ProfileTab; onChange: (t: ProfileTab) => void; badges?: Partial<Record<ProfileTab, number>> }) {
+export default function ProfileTabs({ value, onChange, badges = {}, only }: { value: ProfileTab; onChange: (t: ProfileTab) => void; badges?: Partial<Record<ProfileTab, number>>; only?: readonly ProfileTab[] }) {
   return (
     <nav aria-label="Player sections" style={{ position: 'sticky', top: 0, zIndex: 15, margin: '0 0 16px', padding: '8px 0', background: 'var(--cl-bg-primary, #f2f2f7)' }}>
       <div role="tablist" style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch', padding: 3, borderRadius: 12, background: 'rgba(118,118,128,0.12)' }}>
-        {PROFILE_TABS.map((t) => {
+        {visibleTabs(only).map((t) => {
           const active = t.id === value;
           const n = badges[t.id] ?? 0;
           return (
