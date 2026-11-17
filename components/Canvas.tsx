@@ -28,6 +28,7 @@ import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import { PoseWorkerBridge, terminateGlobalPoseWorker, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
+import { counterZoomScale } from '@/lib/precisionCursorScale';
 import { PRECISION_HOLD_MS as _PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX as _PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX as _PRECISION_HOLD_MAX_TRAVEL_PX, DoubleTapDetector as _DoubleTapDetector } from '@/lib/precisionHold';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
@@ -7378,10 +7379,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
 
           const drawPt = disp ?? tgt;
+          // Counter the zoom about the crosshair's own centre: constant size on screen.
+          const curInv = counterZoomScale(zoomRef.current);
           if (drawPt && cursorAlpha > 0.04) {
             const px = drawPt.x;
             const py = drawPt.y;
             ctx.save();
+            ctx.translate(px, py);
+            ctx.scale(curInv, curInv);
+            ctx.translate(-px, -py);
             ctx.globalAlpha = cursorAlpha;
             ctx.strokeStyle = 'rgba(0,0,0,0.55)';
             ctx.lineWidth = 2.5;
@@ -7416,6 +7422,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const r = 12 + t * 36;
               const a = (1 - t) * 0.55 * cursorAlpha;
               ctx.save();
+              ctx.translate(rip.x, rip.y);
+              ctx.scale(curInv, curInv);
+              ctx.translate(-rip.x, -rip.y);
               ctx.globalAlpha = a;
               ctx.strokeStyle = 'rgba(255,255,255,0.9)';
               ctx.lineWidth = 2;
