@@ -9,7 +9,7 @@ import PlayerNav from '@/components/reports/PlayerNav';
 import PlayerTimeline from '@/components/players/PlayerTimeline';
 import PlayerShareCard from '@/components/players/PlayerShareCard';
 import TrackerSection from '@/components/players/trackers/TrackerSection';
-import ProfileTabs, { isProfileTab, type ProfileTab } from '@/components/players/ProfileTabs';
+import ProfileTabs, { DEFAULT_PROFILE_TAB, PROFILE_TABS, isProfileTab, type ProfileTab } from '@/components/players/ProfileTabs';
 import PlayerAvatar from '@/components/players/PlayerAvatar';
 import EditableLabel from '@/components/players/EditableLabel';
 import ReviewQueue from '@/components/players/ReviewQueue';
@@ -71,7 +71,7 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const [sessions, setSessions] = useState<PlayerSession[]>([]);
   const [loading, setLoading] = useState(true);
   // Which section is open; kept in the URL (?tab=) so a reload or a shared link opens the same one.
-  const [tab, setTabState] = useState<ProfileTab>('overview');
+  const [tab, setTabState] = useState<ProfileTab>(DEFAULT_PROFILE_TAB);
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get('tab');
     if (isProfileTab(t)) setTabState(t);
