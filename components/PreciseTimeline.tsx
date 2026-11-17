@@ -1147,8 +1147,9 @@ export default function PreciseTimeline({
     flexDirection: 'column',
     gap: phoneChrome ? 4 : compact ? 6 : 10,
     width: '100%',
+    // Overlay (phone) dock: lift the controls above the iPhone home indicator / browser bar.
     padding: overlay
-      ? '0'
+      ? '0 0 calc(env(safe-area-inset-bottom, 0px) + 8px)'
       : `${phoneChrome ? 4 : compact ? 6 : 10}px 12px calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 10 : compact ? 16 : 18}px) calc(env(safe-area-inset-bottom, 0px) + ${phoneChrome ? 4 : compact ? 6 : 10}px)`,
     paddingLeft: overlay ? 0 : Math.max(12, leadingInsetPx),
     borderRadius: overlay ? 0 : phoneChrome ? 0 : '14px 14px 0 0',

@@ -7700,6 +7700,11 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         height: '100dvh',
         minHeight: 0,
         overflow: 'hidden',
+        // viewport-fit=cover draws under the notch / camera island in landscape: keep the toolbar
+        // (left) and the zoom controls (right) clear of it. 0 on screens without a cutout.
+        paddingLeft: 'env(safe-area-inset-left, 0px)',
+        paddingRight: 'env(safe-area-inset-right, 0px)',
+        boxSizing: 'border-box',
         background: '#FFFFFF',
         color: '#1D1D1F',
         userSelect: 'none',
