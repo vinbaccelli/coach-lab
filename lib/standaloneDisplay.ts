@@ -1,8 +1,8 @@
 /**
  * True when the page runs as an installed app (iPhone "Add to Home Screen"): no browser bars, and with
- * viewport-fit=cover the page draws under the camera island (landscape) and the home indicator. In a
- * normal browser tab the browser already keeps the page out of those areas, so nothing is added there
- * (padding by the safe area in Chrome made the layout smaller: PR #206, closed).
+ * viewport-fit=cover the page draws under the camera island (landscape) and the home indicator. Nothing is
+ * added in a normal browser tab: padding by the safe area everywhere made the layout smaller in Chrome
+ * (PR #206, closed).
  */
 export function isStandaloneDisplay(
   win: { matchMedia?: (q: string) => { matches: boolean }; navigator?: { standalone?: boolean } } | undefined,
