@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
-import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
+import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, ARROW_HEAD, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { computeSkeletonAngles, formatAngleValue } from '@/lib/skeletonAngles';
 import { emitTourSignal, reportTourState } from '@/lib/tourSignals';
@@ -29,6 +29,7 @@ import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import { PoseWorkerBridge, terminateGlobalPoseWorker, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
 import { counterZoomScale } from '@/lib/precisionCursorScale';
+import { constantSizeContext, getMarkScale, setMarkScale } from '@/lib/markScale';
 import { PRECISION_HOLD_MS as _PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX as _PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX as _PRECISION_HOLD_MAX_TRAVEL_PX, DoubleTapDetector as _DoubleTapDetector } from '@/lib/precisionHold';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
@@ -1306,7 +1307,7 @@ function drawSmoothPath(
   // Arrow at the end: the head of the last segment's direction (the path's final piece is
   // straight along it). The line stops at the head's base and the head's area is clipped
   // out of it, so nothing shows through the head.
-  const head = arrowAtEnd ? arrowHeadGeometry(points[n - 2], last, arrowHeadLength(width, 12, 3)) : null;
+  const head = arrowAtEnd ? arrowHeadGeometry(points[n - 2], last, arrowHeadLength(width, ARROW_HEAD.swing.min, ARROW_HEAD.swing.per) * getMarkScale()) : null;
   if (head) { ctx.save(); clipOutArrowHead(ctx, head); }
 
   ctx.beginPath();
@@ -1544,7 +1545,7 @@ type ContextualTarget =
 
 const DEFAULT_CONTEXTUAL_SNAPSHOT: ContextualStyleSnapshot = {
   color: '#FFFFFF',
-  lineWidth: 3,
+  lineWidth: 1,
   opacity: 1,
   dashed: false,
   spinning: false,
@@ -1991,7 +1992,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, joi
     applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
     // The line stops at the head's base, with the head's area clipped out of it, so it
     // never shows through or past the head (any width, opacity, dash, angle).
-    const head = arrowHeadGeometry(p1, p2, arrowHeadLength(lw, 14, 2));
+    const head = arrowHeadGeometry(p1, p2, arrowHeadLength(lw, ARROW_HEAD.arrow.min, ARROW_HEAD.arrow.per) * getMarkScale());
     if (!head) {
       drawThickSegmentWithEraser(ctx, p1.x, p1.y, p2.x, p2.y, eraserStrokes);
     } else if (head.shaftEnd) {
@@ -7076,27 +7077,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        // Completed strokes
+        // Completed strokes + marks in progress: constant size on screen at every zoom (lib/markScale.ts).
+        const markK = counterZoomScale(zoomRef.current);
+        const mctx = constantSizeContext(ctx, markK);
+        setMarkScale(markK);
         const jointBallR = jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh);
+        try {
         // The swing path's time range follows the video's clock (undefined without one: drawn as before).
         const drawingsTime = drawingVideoTime();
-        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current, jointBallR, drawingsTime);
+        for (const s of strokesRef.current) drawStroke(mctx, s, animTickRef.current, jointBallR, drawingsTime);
 
         // Active (in-progress) stroke
-        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, animTickRef.current, jointBallR);
+        if (activeStrokeRef.current) drawStroke(mctx, activeStrokeRef.current, animTickRef.current, jointBallR);
 
         // Swing path being drawn
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
           const pts = swingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
+          drawSmoothPath(mctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
         // Manual swing path being drawn
         if (manualSwingActiveRef.current && manualSwingPtsRef.current.length > 0) {
           const pts = manualSwingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
+          drawSmoothPath(mctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
         // Joint chain in progress
@@ -7106,7 +7111,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const opts = drawingOptsRef.current;
           const previewNodes = cursor ? [...pts, cursor] : pts;
           drawJointChainStroke(
-            ctx,
+            mctx,
             {
               tool: 'jointChain',
               nodes: previewNodes,
@@ -7120,6 +7125,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             jointBallR,
           );
         }
+        } finally { setMarkScale(1); }
 
         // Locked angle measurements
         for (const m of angleMeasRef.current) drawAngleMeas(ctx, m);

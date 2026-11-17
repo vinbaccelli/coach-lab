@@ -494,7 +494,7 @@ function Home() {
   const [activeTool, setActiveTool]       = useState<ToolType>('select');
   const [drawingOptions, setDrawingOptions] = useState<DrawingOptions>({
     color: '#F8F8F8',
-    lineWidth: 3,
+    lineWidth: 1,
     fontSize: 24,
     dashed: false,
     arrowAtEnd: false,
