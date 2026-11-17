@@ -2,16 +2,18 @@
 
 /** The sections of a player profile. One scrollable row of tabs; the choice is kept in the URL (?tab=). */
 export const PROFILE_TABS = [
-  { id: 'overview', label: 'Overview' },
-  // Second on purpose: it holds the daily add controls (comment, picture, YouTube, link) and on a phone only
-  // the first four tabs are visible without swiping (KNOWN_ISSUES 084).
+  // First on purpose (architect, 2026-11-17): it is what the coach and the client use most, with the add controls
+  // (comment, picture, YouTube, link). The profile opens on it.
   { id: 'timeline', label: 'Timeline' },
+  { id: 'overview', label: 'Overview' },
   { id: 'technical', label: 'Technical' },
   { id: 'progress', label: 'Progress' },
   { id: 'biometrics', label: 'Biometrics' },
   { id: 'fitness', label: 'Fitness' },
   { id: 'nutrition', label: 'Nutrition' },
 ] as const;
+/** The tab a profile opens on. */
+export const DEFAULT_PROFILE_TAB = 'timeline' as const;
 export type ProfileTab = (typeof PROFILE_TABS)[number]['id'];
 
 /** The tabs to show: all of them, or only these (the client's link shows what that link may see). Order is always the profile's. */
