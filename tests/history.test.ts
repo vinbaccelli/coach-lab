@@ -90,3 +90,15 @@ test('a one-value tracker named like its value does not repeat the name in the t
   const other = itemFromTrackerEntry(e, { ...t, fields: [{ ...t.fields[0], label: 'Speed' }] });
   assert.equal(other.body, 'Speed 172 km/h');
 });
+
+test('a screenshot report shows its picture and not the boilerplate note', async () => {
+  const { itemFromReport } = await import('../lib/players/history');
+  const shot = itemFromReport({ id: 'e1', category: 'technique', folder_label: 'Analysis 2026-11-17 11:05', body_text: 'Screenshot from analysis session.', created_at: '2026-11-17T11:05:00Z', screenshots: ['https://drive.example/a.png'] });
+  assert.equal(shot.imageUrl, 'https://drive.example/a.png');
+  assert.equal(shot.body, undefined);
+  const jsonShape = itemFromReport({ id: 'e2', category: 'technique', folder_label: null, body_text: null, created_at: '2026-11-17T11:05:00Z', screenshots: JSON.stringify([{ url: 'https://x.example/b.png' }]) });
+  assert.equal(jsonShape.imageUrl, 'https://x.example/b.png');
+  const noteOnly = itemFromReport({ id: 'e3', category: 'match', folder_label: null, body_text: 'Great set', created_at: '2026-11-17T11:05:00Z' });
+  assert.equal(noteOnly.imageUrl, undefined);
+  assert.equal(noteOnly.body, 'Great set');
+});

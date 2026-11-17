@@ -107,7 +107,7 @@ export async function loadHistory(client: SupabaseClient, o: HistoryOptions): Pr
   }
   // Reports: the coach's only (never through a share link).
   if (o.viewer === 'coach' && !coachOnly && want('report', 'technical')) {
-    jobs.push(byCreated(() => db.from('player_entries').select('id,category,folder_label,body_text,created_at').eq('player_id', o.playerId), f, c, L)
+    jobs.push(byCreated(() => db.from('player_entries').select('id,category,folder_label,body_text,screenshots,created_at').eq('player_id', o.playerId), f, c, L)
       .then((r) => take(r, itemFromReport)));
   }
   // Dated technical comments (Forehand, Backhand…), from the player's sheet.
