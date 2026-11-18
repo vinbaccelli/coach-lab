@@ -295,20 +295,19 @@ export function dataColumnHit(
 }
 
 /**
- * The column's top-left as fractions of the canvas, kept fully inside the video picture
- * `video` (dx, dy, dw, dh; falls back to the canvas when the column is larger than it).
+ * The column's top-left as fractions of the canvas, kept fully inside the canvas (black bars included: the
+ * coach moves it into the empty space above or below the video). `_video` is kept for the callers' signature.
  */
 export function clampColumnPos(
   frac: { x: number; y: number },
   size: { w: number; h: number },
   canvas: { w: number; h: number },
-  video: { dx: number; dy: number; dw: number; dh: number } | null | undefined,
+  _video?: { dx: number; dy: number; dw: number; dh: number } | null,
 ): { x: number; y: number } {
   if (!(canvas.w > 0) || !(canvas.h > 0)) return frac;
-  const area = video && video.dw >= size.w && video.dh >= size.h
-    ? { x: video.dx, y: video.dy, w: video.dw, h: video.dh }
-    : { x: 0, y: 0, w: canvas.w, h: canvas.h };
-  const px = Math.max(area.x, Math.min(area.x + area.w - size.w, frac.x * canvas.w));
-  const py = Math.max(area.y, Math.min(area.y + area.h - size.h, frac.y * canvas.h));
+  // The whole canvas, black bars included: the coach puts the column in the empty space above or below a
+  // video that does not fill the screen. (The generated video keeps it inside the video frame itself.)
+  const px = Math.max(0, Math.min(canvas.w - size.w, frac.x * canvas.w));
+  const py = Math.max(0, Math.min(canvas.h - size.h, frac.y * canvas.h));
   return { x: px / canvas.w, y: py / canvas.h };
 }

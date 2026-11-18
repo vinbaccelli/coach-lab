@@ -9595,7 +9595,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (canvas) {
           const dx = pos.x - mcDraggingRef.current.startX;
           const dy = pos.y - mcDraggingRef.current.startY;
-          // Kept inside the video picture (lib/drawingTools.ts clampColumnPos).
+          // Kept inside the canvas, black bars included (lib/drawingTools.ts clampColumnPos); the generated video keeps it inside the frame.
           const cW = cssW(canvas), cH = cssH(canvas);
           const n = measurementColumnRef.current?.length ?? 0;
           const sc = mcScaleRef.current;
