@@ -49,6 +49,34 @@ export default function VideoDebugBox({ videoRef, inline = false, getAppZoom }: 
   const [, setTick] = useState(0);
   // Read on the client only (the page is server-rendered too).
   const [ua, setUa] = useState('');
+  // Layout box (?vdebug=1 only): the numbers needed to see why a control is cut at a screen edge.
+  const [box, setBox] = useState('');
+  useEffect(() => {
+    const read = () => {
+      try {
+        const probe = document.createElement('div');
+        probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)';
+        document.body.appendChild(probe);
+        const cs = getComputedStyle(probe);
+        const inset = `${cs.paddingTop}/${cs.paddingRight}/${cs.paddingBottom}/${cs.paddingLeft}`;
+        probe.remove();
+        const de = document.documentElement;
+        const vvp = window.visualViewport;
+        let maxRight = 0; let widest = '';
+        document.querySelectorAll('button,a').forEach((el) => {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.right > maxRight) { maxRight = r.right; widest = (el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 14); }
+        });
+        const standalone = (window.matchMedia?.('(display-mode: standalone)').matches ? 'standalone' : 'tab') + ((navigator as Navigator & { standalone?: boolean }).standalone ? '+ios' : '');
+        setBox(`inner ${window.innerWidth}x${window.innerHeight} client ${de.clientWidth}x${de.clientHeight} scrollW ${de.scrollWidth} screen ${screen.width}x${screen.height} outer ${window.outerWidth}x${window.outerHeight} vv ${vvp ? `${Math.round(vvp.width)}x${Math.round(vvp.height)}@${Math.round(vvp.offsetLeft)},${Math.round(vvp.offsetTop)}` : 'n/a'} safe(t/r/b/l) ${inset} ${standalone} rightmost-button ${Math.round(maxRight)} [${widest}]`);
+      } catch { /* diagnostic only */ }
+    };
+    read();
+    window.addEventListener('resize', read);
+    window.addEventListener('orientationchange', read);
+    const t = setInterval(read, 1500);
+    return () => { window.removeEventListener('resize', read); window.removeEventListener('orientationchange', read); clearInterval(t); };
+  }, []);
   // How many times the element's src attribute has been set since this box mounted (should be once per upload).
   const [srcSets, setSrcSets] = useState(0);
   useEffect(() => {
@@ -92,6 +120,7 @@ export default function VideoDebugBox({ videoRef, inline = false, getAppZoom }: 
       }}
     >
       <div style={{ color: '#fff', fontWeight: 700 }}>vdebug · {ua}</div>
+      {row('layout', box || '…')}
       {v ? (
         <>
           {row('error', v.error ? `code=${v.error.code} ${v.error.message || '(no message)'}` : 'none', v.error ? '#FF8A80' : '#9EF7A0')}

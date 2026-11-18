@@ -191,6 +191,12 @@ export function downloadDataURL(dataUrl: string, filename: string): void {
 export const ARROW_HEAD_HALF_ANGLE = Math.PI / 7;
 
 /** Head length for a line width: `min`, or `perWidth` × the width once that is larger. */
+/**
+ * Head size (screen px) of the arrow tool and of the swing-path arrow: a small minimum, then growing
+ * with the line width. The old minimums (14 and 12 px) were too big for a thin line on a phone.
+ */
+export const ARROW_HEAD = { arrow: { min: 8, per: 2.5 }, swing: { min: 7, per: 3 } } as const;
+
 export function arrowHeadLength(lineWidth: number, min: number, perWidth: number): number {
   return Math.max(min, (Number.isFinite(lineWidth) ? lineWidth : 0) * perWidth);
 }

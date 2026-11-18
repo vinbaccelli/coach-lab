@@ -167,6 +167,8 @@ interface ToolPaletteProps {
   stroMotionPanel?: React.ReactNode;
   /** Called when the user navigates to a toolbar screen. */
   onNavigate?: (screen: 'home' | 'pan' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
+  /** The toolbar went BACK (Back button, or reset to home): the screen now shown. `onNavigate` only reports screens opened. */
+  onNavigateBack?: (screen: 'home' | 'pan' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
   /**
    * Pan/Hand tool controls. The pan screen owns ALL viewport navigation —
    * zoom in, zoom out, the drag toggle and reset — so entering it is the one
@@ -696,21 +698,44 @@ interface ToolbarChrome {
   onLockedFeature?: (feature: Feature) => void;
 }
 
+/**
+ * A phone held sideways is ~390 px tall. The footer (screenshot, undo, redo, clear, session, home,
+ * account) is pinned under the tool list, and as a single column of 44 px buttons it took the whole
+ * rail, leaving the tools above it unreachable. Short screens: the footer wraps into two columns
+ * and, if it is still tall, scrolls inside at most 45 % of the rail.
+ */
+function useShortViewport(): boolean {
+  const [short, setShort] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(max-height: 520px)');
+    const sync = () => setShort(mq.matches);
+    sync();
+    mq.addEventListener?.('change', sync);
+    return () => mq.removeEventListener?.('change', sync);
+  }, []);
+  return short;
+}
+
 function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
   const {
     mobileChrome, onScreenshotSave, screenshotSaving, denseMobile, io, rb,
     pressedKey, fire, iconBox, onUndo, onRedo, onClear, onCleanSession, authContent,
   } = chrome;
+  const short = useShortViewport();
   return (
     <div
       style={{
         flexShrink: 0,
+        ...(short
+          ? { display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignContent: 'flex-start', gap: 4, maxHeight: '45%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }
+          : null),
         paddingBottom: mobileChrome
           ? 'calc(4px + env(safe-area-inset-bottom, 0px) + var(--anglemotion-install-banner-height, 0px))'
           : undefined,
       }}
     >
-      <div style={{ height: 1, background: 'var(--cl-border)', margin: '8px 0' }} />
+      <div style={{ height: 1, background: 'var(--cl-border)', margin: '8px 0', ...(short ? { flexBasis: '100%' } : null) }} />
       {onScreenshotSave ? (
         <Row chrome={chrome}
           k="screenshot"
@@ -778,7 +803,7 @@ function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
         </span>
         {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Control Panel</span>}
       </Link>
-      {authContent ? <div style={{ marginTop: 4 }}>{authContent}</div> : null}
+      {authContent ? <div style={{ marginTop: 4, ...(short ? { flexBasis: '100%' } : null) }}>{authContent}</div> : null}
     </div>
   );
 }
@@ -1197,6 +1222,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onToggleToolbarLabels,
     stroMotionPanel,
     onNavigate,
+    onNavigateBack,
     stroMotionEnabled = false,
     onStroMotionToggle,
     authContent,
@@ -1246,9 +1272,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   const top = navStack[navStack.length - 1];
   const { pressedKey, fire } = useTapScale();
 
+  const navStackRef = useRef(navStack);
+  navStackRef.current = navStack;
   const pop = useCallback(() => {
-    setNavStack((s) => (s.length > 1 ? s.slice(0, -1) : ['home']));
-  }, []);
+    const s = navStackRef.current;
+    const next: NavScreen[] = s.length > 1 ? s.slice(0, -1) : ['home'];
+    setNavStack(next);
+    onNavigateBack?.(next[next.length - 1]);
+  }, [onNavigateBack]);
   const push = useCallback((x: NavScreen) => {
     setNavStack((s) => [...s, x]);
     onNavigate?.(x);
@@ -1262,7 +1293,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
       '@keyframes anglemotionToolbarScreenIn{from{opacity:.92;transform:translateX(8px)}to{opacity:1;transform:none}}';
     document.head.appendChild(el);
   }, []);
-  const resetNav = useCallback(() => setNavStack(['home']), []);
+  const resetNav = useCallback(() => { setNavStack(['home']); onNavigateBack?.('home'); }, [onNavigateBack]);
 
   useEffect(() => {
     if (!drawContextActive) {

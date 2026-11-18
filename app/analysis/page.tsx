@@ -23,6 +23,7 @@ import { ERASER_SIZE_DEFAULT } from '@/lib/eraser';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 import { playWithSound, routeFor } from '@/lib/videoSound';
+import { iosDeviceNow, cameraConstraints } from '@/lib/iosSystemMic';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
 import { useRecording, RECORDING_AUDIO_CONSTRAINTS, FLOATING_CAMERA_WINDOW } from '@/contexts/RecordingContext';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
@@ -57,7 +58,7 @@ import VideoDebugBox from '@/components/VideoDebugBox';
 import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoDetailText, videoStateText } from '@/lib/firstFrame';
 import { recoveryPlan, reloadSameSource, shouldRestartFromStart, watchStuckPlayback } from '@/lib/seekWait';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
-import { selectedSection, type TrackScope } from '@/lib/aiTrackScope';
+import { displayedSection, metricsSectionShown, motionSectionShown, selectedSection, type TrackScope } from '@/lib/aiTrackScope';
 import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
 import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
@@ -224,6 +225,7 @@ import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/res
 import { racketWorkerEnabled } from '@/lib/stroMotionDraft/racketWorkerClient';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
+import { useStandaloneDisplay } from '@/lib/useStandaloneDisplay';
 import { SHRINK_TIER_KEY, lowerTier, parseTier, shrinkTarget, tierLabel, DEFAULT_PHONE_TIER } from '@/lib/phoneShrink/tier';
 import { probeVideo, shrinkVideoFile, type ShrinkHandle } from '@/lib/phoneShrink/shrink';
 
@@ -494,7 +496,7 @@ function Home() {
   const [activeTool, setActiveTool]       = useState<ToolType>('select');
   const [drawingOptions, setDrawingOptions] = useState<DrawingOptions>({
     color: '#F8F8F8',
-    lineWidth: 3,
+    lineWidth: 1,
     fontSize: 24,
     dashed: false,
     arrowAtEnd: false,
@@ -1343,6 +1345,13 @@ function Home() {
   // section from the auto-defaults (snapshot span / full video). AI Track uses
   // it to decide "whole video" vs "selected section" for the single button.
   const [metricsTrimUserAdjusted, setMetricsTrimUserAdjusted] = useState(false);
+  /**
+   * The coach opened Metrics: the section handles show at once (lib/aiTrackScope.ts
+   * metricsSectionShown). Before, they appeared only once a snapshot existed or the skeleton
+   * was on. With no section set they SHOW the whole clip without storing it (displayedSection),
+   * so the snapshot-span and skeleton defaults below still apply exactly as before.
+   */
+  const [metricsSectionOpened, setMetricsSectionOpened] = useState(false);
 
   /** Seek the video to a time and resolve once the frame is ready. */
   const seekVideoTo = useCallback((t: number): Promise<void> => new Promise((resolve) => {
@@ -1535,6 +1544,7 @@ function Home() {
     setMetricsSectionStart(prev => prev == null ? 0 : prev);
     setMetricsSectionEnd(prev => prev == null ? dur : prev);
   }, [skeletonEnabled, videoSrc]);
+
 
   // ── Precision AI Track (skeleton "bake") ─────────────────────────────────
   // FRAME-STEPPED pass: seek every frame time, detect on the PAUSED frame with
@@ -4208,6 +4218,7 @@ function Home() {
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
   }, []);
+  const standaloneApp = useStandaloneDisplay();
   const precisionAvailable = isMobile && coarsePointer;
 
   // Never leave the mode latched on a device that can no longer drive it
@@ -5367,17 +5378,17 @@ function Home() {
 
   const startWebcam = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: RECORDING_AUDIO_CONSTRAINTS,
-      });
+      // iOS: video only. The page opening the mic takes it from the iPhone's own Screen Recording
+      // (silent voice, "asset writer failing to save").
+      const ios = iosDeviceNow();
+      const stream = await navigator.mediaDevices.getUserMedia(cameraConstraints(ios, RECORDING_AUDIO_CONSTRAINTS));
       webcamStreamRef.current = stream;
       if (webcamVideoRef.current) {
         webcamVideoRef.current.srcObject = stream;
         await webcamVideoRef.current.play().catch(() => {});
       }
       setWebcamActive(true);
-      setMicActive(true);
+      setMicActive(stream.getAudioTracks().length > 0);
       setMicMuted(false);
       stream.getAudioTracks().forEach((t) => {
         t.enabled = true;
@@ -5415,6 +5426,10 @@ function Home() {
   }, [webcamActive, startWebcam, stopWebcam]);
 
   const startMic = useCallback(async () => {
+    if (iosDeviceNow()) {
+      setProcessingStatus("On iPhone the page does not open the microphone: use the iPhone Screen Recording's mic (long-press the record button in Control Center).");
+      return;
+    }
     try {
       // Recording constraints, not the browser's call-tuned defaults — this is the
       // track startRecording prefers above every other source.
@@ -6903,15 +6918,13 @@ function Home() {
     // Snapshot phase markers (green balls) — shown whenever snapshots exist and
     // we are not in StroMotion mode. Migrated off the removed frame workflow so
     // the Snapshot architecture owns the timeline markers directly.
-    if (!stroMotionActive && stroMotionHtml5Only && (biomechPhaseMarkers || skeletonEnabled)) {
+    if (metricsSectionShown({ stroMotionActive, html5: stroMotionHtml5Only, snapshots: !!biomechPhaseMarkers, skeleton: skeletonEnabled, metricsOpened: metricsSectionOpened })) {
       return {
         // Draggable start/end handles delimiting the section the Metrics replay/
         // recording travels over — and, when the skeleton is on, the range the
         // Precision AI Track pass covers. Each handle moves independently and
         // the timeline does not re-zoom.
-        trimRange: (metricsSectionStart != null && metricsSectionEnd != null)
-          ? { start: metricsSectionStart, end: metricsSectionEnd } as { start: number; end: number }
-          : null,
+        trimRange: displayedSection(metricsSectionStart, metricsSectionEnd, metricsSectionOpened ? stroVideoDuration : 0),
         onTrimChange: (start: number, end: number) => { setMetricsSectionStart(start); setMetricsSectionEnd(end); setMetricsTrimUserAdjusted(true); },
         trimAccent: '#34C759',
         onCurrentTime: undefined as undefined,
@@ -6931,7 +6944,9 @@ function Home() {
     }
     if (stroMotionActive && stroMotionHtml5Only) {
       return {
-        trimRange: stroMotionDraft?.frames.length ? { start: stroStartFrame, end: stroEndFrame } as { start: number; end: number } : null,
+        // Shown as soon as Motion Layer opens (the section is the whole clip from the first
+        // metadata read), not only once the draft's frames exist.
+        trimRange: motionSectionShown(stroStartFrame, stroEndFrame) ? { start: stroStartFrame, end: stroEndFrame } as { start: number; end: number } : null,
         // Coach can drag the section start/end handles on the timeline.
         onTrimChange: (start: number, end: number) => { setStroStartFrame(start); setStroEndFrame(end); },
         trimAccent: '#FF9500',
@@ -7000,6 +7015,8 @@ function Home() {
     metricsSectionStart,
     metricsSectionEnd,
     skeletonEnabled,
+    metricsSectionOpened,
+    stroVideoDuration,
   ]);
 
   const renderTimelineDock = () => (
@@ -7169,6 +7186,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
     onSkeletonShowLeftLegChange:     setSkeletonShowLeftLeg,
     stroMotionPanel: stroMotionPanelEl,
     authContent: <AuthButton iconOnly={compactToolbarRail} />,
+    // Back to the toolbar's home screen: Metrics was left, its green handles hide again
+    // (they still show when snapshots exist or the skeleton is on, as before).
+    onNavigateBack: (screen) => { if (screen === 'home') setMetricsSectionOpened(false); },
     onNavigate: (screen) => {
       if (screen === 'stromotion') {
         setStroMotionActive(true);
@@ -7192,6 +7212,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         // runs by itself.
       } else if (screen === 'aimetrics') {
         setStroMotionActive(false);
+        setMetricsSectionOpened(true);
       } else if (screen === 'skeleton') {
         // SPEC: pressing "Skeleton" only OPENS this toolbar (plus first-time
         // activation). It must never reset, relock, or hide a running
@@ -7713,6 +7734,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         height: '100dvh',
         minHeight: 0,
         overflow: 'hidden',
+        // Installed app only: keep the toolbar and the right-hand controls clear of the camera island
+        // in landscape (browser tabs already do this themselves; see lib/standaloneDisplay.ts).
+        ...(standaloneApp ? { paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', boxSizing: 'border-box' as const } : null),
         background: '#FFFFFF',
         color: '#1D1D1F',
         userSelect: 'none',
@@ -10312,9 +10336,21 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                 const skeleton = (active ? canvasRef.current?.getSkeletonKeypoints?.() : null) ?? s.skeleton ?? null;
                 // On-canvas strokes follow resizes, so the active one is in today's box.
                 const box = (active ? strokesBoxOf(canvasRef.current) : null) ?? s.drawingsBox ?? null;
-                return { id: s.id, timeSec: s.timeSec, strokes, box, skeleton };
+                // Its own data column (the active one: as on screen now, edits included), for its hold.
+                const column = active
+                  ? measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle')
+                  : s.column;
+                return { id: s.id, timeSec: s.timeSec, strokes, box, skeleton, column, label: s.label };
               });
           }}
+          // The coach's own LIVE column rows (no skeleton angles: the export computes those per
+          // frame). In SNAPSHOT mode the column on screen is the snapshot's, so none.
+          getLiveColumnForExport={() => ({
+            rows: analysisModeRef.current.kind === 'live'
+              ? measurementColumnRef.current.filter(m => m.type !== 'skeleton-angle')
+              : [],
+            title: 'Data Column',
+          })}
           onSnapshotReport={() => {
             if (snapshots.length > 0) setMetricsExportOpen(false);
             void handleGenerateSnapshots();

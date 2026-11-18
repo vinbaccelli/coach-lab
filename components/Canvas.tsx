@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
-import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
+import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, ARROW_HEAD, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { computeSkeletonAngles, formatAngleValue } from '@/lib/skeletonAngles';
 import { emitTourSignal, reportTourState } from '@/lib/tourSignals';
@@ -28,6 +28,8 @@ import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import { PoseWorkerBridge, terminateGlobalPoseWorker, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
+import { counterZoomScale } from '@/lib/precisionCursorScale';
+import { constantSizeContext, getMarkScale, setMarkScale } from '@/lib/markScale';
 import { PRECISION_HOLD_MS as _PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX as _PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX as _PRECISION_HOLD_MAX_TRAVEL_PX, DoubleTapDetector as _DoubleTapDetector } from '@/lib/precisionHold';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
@@ -36,7 +38,7 @@ import { AheadBuffer, LookAheadVideo, leadSeconds, lookAheadDisabled, sampleHidd
 import { modeLabel, lookAheadDecodeOnly, lookAheadLeadOverride, liveEngineSwitch } from '@/lib/skeletonSwitches';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
-import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
+import { liveColumnRows, overlayTransform, type ColumnRow, type VideoBox } from '@/lib/exportOverlay';
 import { HelpCircle } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, pickStroVideoMime, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
@@ -270,6 +272,8 @@ export interface ExportOverlayFrozen {
   drawingCount: number;
   readonly strokes: readonly unknown[];
   readonly angles: readonly unknown[];
+  /** The data column's place and size on screen at capture (fractions of the canvas, scale, canvas logical size). */
+  readonly column?: { x: number; y: number; scale: number; canvasW: number; canvasH: number };
 }
 
 export interface CanvasHandle {
@@ -378,7 +382,16 @@ export interface CanvasHandle {
         strokes: readonly unknown[];
         box: VideoBox | null;
         skeleton: ReadonlyArray<{ x: number; y: number; score: number; name: string }> | null;
+        /** Data column on: this snapshot's own rows and title (lib/exportOverlay.ts holdColumnRows). */
+        column?: readonly ColumnRow[];
+        columnTitle?: string;
       } | null;
+      /**
+       * Data column, OFF unless given (the export is then exactly as before). Normal frames:
+       * `ownRows` + the joint angles of the baked pose at that time (liveColumnRows), "—" where
+       * there is none. Drawn where the coach placed it on screen, kept inside the video.
+       */
+      dataColumn?: { ownRows: readonly ColumnRow[]; title: string } | null;
     },
   ) => ExportOverlayFrozen;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
@@ -1126,6 +1139,110 @@ function clipOutArrowHead(ctx: CanvasRenderingContext2D, g: ArrowHeadGeometry): 
   ctx.clip('evenodd');
 }
 
+/** The data column's base width (CSS px at scale 1). */
+const MC_BASE_W = 150;
+
+/** The data column's size for `n` rows at scale `s` (logical px). */
+function dataColumnSize(n: number, s: number): { w: number; h: number } {
+  const w = Math.round(MC_BASE_W * s);
+  const lineH = Math.round(22 * s);
+  return { w, h: n > 0 ? n * lineH + Math.round(28 * s) : Math.round(48 * s) };
+}
+
+/**
+ * Draw the data column at (mcX, mcY), scale `s`: the screen's column, and the generated
+ * video's (`handles` false: no drag dots / resize grip there). A row whose value is null
+ * (generated video, not computable for that frame) shows "—".
+ */
+function drawDataColumnBox(
+  ctx: CanvasRenderingContext2D,
+  mcItems: ReadonlyArray<{ label: string; value: number | null; unit: string }>,
+  title: string,
+  mcX: number,
+  mcY: number,
+  s: number,
+  handles: boolean,
+): void {
+  const { w: mcW, h: mcH } = dataColumnSize(mcItems.length, s);
+  const mcLineH = Math.round(22 * s);
+  const pad = Math.round(8 * s);
+  const hasItems = mcItems.length > 0;
+  const f = (px: number) => `${Math.round(px * s)}px`;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(mcX, mcY, mcW, mcH, 10);
+  else ctx.rect(mcX, mcY, mcW, mcH);
+  ctx.fill();
+
+  // Header — reflects the locked owner (phase / frame / live).
+  ctx.font = `bold ${f(10)} -apple-system, sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  const mcTitle = (title || 'DATA COLUMN').toUpperCase();
+  ctx.fillText(mcTitle.length > 22 ? mcTitle.slice(0, 21) + '…' : mcTitle, mcX + pad, mcY + Math.round(14 * s));
+
+  // Drag handle dots
+  if (handles) {
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    for (let d = 0; d < 3; d++) ctx.fillRect(mcX + mcW - Math.round(18 * s) + d * Math.round(5 * s), mcY + Math.round(10 * s), 2, 2);
+  }
+
+  if (hasItems) {
+    for (let i = 0; i < mcItems.length; i++) {
+      const item = mcItems[i];
+      const y = mcY + Math.round(28 * s) + i * mcLineH;
+      if (item.value == null) {
+        // Not computable for this frame (generated video only): a dash, never a made-up number.
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = `${f(11)} -apple-system, sans-serif`;
+        ctx.fillText(item.label, mcX + pad, y);
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
+        ctx.fillText('—', mcX + mcW - pad - ctx.measureText('—').width, y);
+      } else if (item.value === 0 && !item.unit) {
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.font = `italic ${f(11)} -apple-system, sans-serif`;
+        ctx.fillText(item.label, mcX + pad, y);
+      } else if (item.unit === '' && item.value !== 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = `${f(11)} -apple-system, sans-serif`;
+        ctx.fillText(item.label, mcX + pad, y);
+        ctx.fillStyle = '#93C5FD';
+        ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
+        ctx.fillText(`${item.value}`, mcX + mcW - pad - ctx.measureText(`${item.value}`).width, y);
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = `${f(11)} -apple-system, sans-serif`;
+        ctx.fillText(item.label, mcX + pad, y);
+        ctx.fillStyle = '#93C5FD';
+        ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
+        const valText = formatAngleValue(item.value, item.unit);
+        ctx.fillText(valText, mcX + mcW - pad - ctx.measureText(valText).width, y);
+      }
+    }
+  } else {
+    ctx.font = `${f(11)} -apple-system, sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillText('Draw to add measurements', mcX + pad, mcY + Math.round(34 * s));
+  }
+
+  // Resize handle — bottom-right corner (diagonal grip lines).
+  if (handles) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1.5;
+    for (let g = 0; g < 3; g++) {
+      const off = 4 + g * 4;
+      ctx.beginPath();
+      ctx.moveTo(mcX + mcW - off, mcY + mcH - 4);
+      ctx.lineTo(mcX + mcW - 4, mcY + mcH - off);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+}
+
 function labelPill(ctx: CanvasRenderingContext2D, text: string, x: number, y: number): void {
   ctx.save();
   ctx.font = 'bold 12px Inter, sans-serif';
@@ -1190,7 +1307,7 @@ function drawSmoothPath(
   // Arrow at the end: the head of the last segment's direction (the path's final piece is
   // straight along it). The line stops at the head's base and the head's area is clipped
   // out of it, so nothing shows through the head.
-  const head = arrowAtEnd ? arrowHeadGeometry(points[n - 2], last, arrowHeadLength(width, 12, 3)) : null;
+  const head = arrowAtEnd ? arrowHeadGeometry(points[n - 2], last, arrowHeadLength(width, ARROW_HEAD.swing.min, ARROW_HEAD.swing.per) * getMarkScale()) : null;
   if (head) { ctx.save(); clipOutArrowHead(ctx, head); }
 
   ctx.beginPath();
@@ -1428,7 +1545,7 @@ type ContextualTarget =
 
 const DEFAULT_CONTEXTUAL_SNAPSHOT: ContextualStyleSnapshot = {
   color: '#FFFFFF',
-  lineWidth: 3,
+  lineWidth: 1,
   opacity: 1,
   dashed: false,
   spinning: false,
@@ -1875,7 +1992,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, joi
     applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
     // The line stops at the head's base, with the head's area clipped out of it, so it
     // never shows through or past the head (any width, opacity, dash, angle).
-    const head = arrowHeadGeometry(p1, p2, arrowHeadLength(lw, 14, 2));
+    const head = arrowHeadGeometry(p1, p2, arrowHeadLength(lw, ARROW_HEAD.arrow.min, ARROW_HEAD.arrow.per) * getMarkScale());
     if (!head) {
       drawThickSegmentWithEraser(ctx, p1.x, p1.y, p2.x, p2.y, eraserStrokes);
     } else if (head.shaftEnd) {
@@ -2454,7 +2571,6 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { columnDeleteModeRef.current = columnDeleteMode; }, [columnDeleteMode]);
     const onMeasurementItemDeleteRef = useRef(onMeasurementItemDelete);
     useEffect(() => { onMeasurementItemDeleteRef.current = onMeasurementItemDelete; }, [onMeasurementItemDelete]);
-    const MC_BASE_W = 150;
     const skeletonWaitingForClickRef = useRef(false);
     const skeletonKeepAliveRef = useRef(skeletonKeepAlive);
     useEffect(() => { skeletonKeepAliveRef.current = skeletonKeepAlive; }, [skeletonKeepAlive]);
@@ -3969,6 +4085,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           drawingCount: strokesRef.current.length + angleMeasRef.current.length,
           strokes: [...strokesRef.current],
           angles: [...angleMeasRef.current],
+          column: {
+            x: mcPosRef.current.x, y: mcPosRef.current.y, scale: mcScaleRef.current,
+            canvasW: canvasRef.current ? cssW(canvasRef.current) : 0, canvasH: canvasRef.current ? cssH(canvasRef.current) : 0,
+          },
+        };
+        // The column in logical canvas px, where the coach put it on screen, kept inside `box`.
+        const drawColumn = (c: CanvasRenderingContext2D, box: VideoBox, rows: readonly ColumnRow[], title: string) => {
+          const col = frozen.column;
+          // Nothing to show (a snapshot with an empty column): no box, not the screen's "Draw to add" hint.
+          if (!rows.length || !col || !(col.canvasW > 0) || !(col.canvasH > 0)) return;
+          const { w, h } = dataColumnSize(rows.length, col.scale);
+          const sx = Math.round(Math.min(col.x * col.canvasW, col.canvasW - w - 4));
+          const sy = Math.round(Math.min(col.y * col.canvasH, col.canvasH - h - 4));
+          const x = Math.max(box.dx, Math.min(sx, box.dx + box.dw - w));
+          const y = Math.max(box.dy, Math.min(sy, box.dy + box.dh - h));
+          drawDataColumnBox(c, rows, title, x, y, col.scale, false);
         };
         if (ctx && opts.hold) {
           // Snapshot hold: its own strokes in its own box, its frozen pose. Read-only.
@@ -3992,6 +4124,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 classicColors: skeletonClassicColorsRef.current,
                 parts: skeletonPartsRef.current,
               });
+            }
+            if (opts.dataColumn && hold.column) {
+              ctx.setTransform(htf.sx, 0, 0, htf.sy, htf.tx, htf.ty);
+              drawColumn(ctx, box, hold.column, hold.columnTitle ?? opts.dataColumn.title);
             }
           } catch (e) {
             if (process.env.NODE_ENV !== 'production') console.warn('[Canvas] export hold overlay skipped:', e);
@@ -4034,6 +4170,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 parts: skeletonPartsRef.current,
               });
             }
+          }
+          if (opts.dataColumn) {
+            // Values of the baked AI Track pose at this time (shared computeJointAngles, unchanged).
+            const pose = lookupBakedPose(mediaTime) ?? opts.livePose?.(mediaTime) ?? null;
+            ctx.setTransform(tf.sx, 0, 0, tf.sy, tf.tx, tf.ty);
+            drawColumn(ctx, frozen.box, liveColumnRows(opts.dataColumn.ownRows, pose), opts.dataColumn.title);
           }
         } catch (e) {
           // An overlay error must never stop the export: the video frame is already drawn.
@@ -6935,27 +7077,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        // Completed strokes
+        // Completed strokes + marks in progress: constant size on screen at every zoom (lib/markScale.ts).
+        const markK = counterZoomScale(zoomRef.current);
+        const mctx = constantSizeContext(ctx, markK);
+        setMarkScale(markK);
         const jointBallR = jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh);
+        try {
         // The swing path's time range follows the video's clock (undefined without one: drawn as before).
         const drawingsTime = drawingVideoTime();
-        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current, jointBallR, drawingsTime);
+        for (const s of strokesRef.current) drawStroke(mctx, s, animTickRef.current, jointBallR, drawingsTime);
 
         // Active (in-progress) stroke
-        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, animTickRef.current, jointBallR);
+        if (activeStrokeRef.current) drawStroke(mctx, activeStrokeRef.current, animTickRef.current, jointBallR);
 
         // Swing path being drawn
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
           const pts = swingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
+          drawSmoothPath(mctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
         // Manual swing path being drawn
         if (manualSwingActiveRef.current && manualSwingPtsRef.current.length > 0) {
           const pts = manualSwingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
+          drawSmoothPath(mctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
         // Joint chain in progress
@@ -6965,7 +7111,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const opts = drawingOptsRef.current;
           const previewNodes = cursor ? [...pts, cursor] : pts;
           drawJointChainStroke(
-            ctx,
+            mctx,
             {
               tool: 'jointChain',
               nodes: previewNodes,
@@ -6979,6 +7125,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             jointBallR,
           );
         }
+        } finally { setMarkScale(1); }
 
         // Locked angle measurements
         for (const m of angleMeasRef.current) drawAngleMeas(ctx, m);
@@ -7238,10 +7385,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
 
           const drawPt = disp ?? tgt;
+          // Counter the zoom about the crosshair's own centre: constant size on screen.
+          const curInv = counterZoomScale(zoomRef.current);
           if (drawPt && cursorAlpha > 0.04) {
             const px = drawPt.x;
             const py = drawPt.y;
             ctx.save();
+            ctx.translate(px, py);
+            ctx.scale(curInv, curInv);
+            ctx.translate(-px, -py);
             ctx.globalAlpha = cursorAlpha;
             ctx.strokeStyle = 'rgba(0,0,0,0.55)';
             ctx.lineWidth = 2.5;
@@ -7276,6 +7428,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const r = 12 + t * 36;
               const a = (1 - t) * 0.55 * cursorAlpha;
               ctx.save();
+              ctx.translate(rip.x, rip.y);
+              ctx.scale(curInv, curInv);
+              ctx.translate(-rip.x, -rip.y);
               ctx.globalAlpha = a;
               ctx.strokeStyle = 'rgba(255,255,255,0.9)';
               ctx.lineWidth = 2;
@@ -7391,75 +7546,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const mcItems = measurementColumnRef.current;
         if (mcItems !== null) {
           const s = mcScaleRef.current;
-          const mcW = Math.round(MC_BASE_W * s);
-          const mcLineH = Math.round(22 * s);
-          const pad = Math.round(8 * s);
-          const hasItems = mcItems.length > 0;
-          const mcH = hasItems ? mcItems.length * mcLineH + Math.round(28 * s) : Math.round(48 * s);
+          const { w: mcW, h: mcH } = dataColumnSize(mcItems.length, s);
           const mcX = Math.round(Math.min(mcPosRef.current.x * W, W - mcW - 4));
           const mcY = Math.round(Math.min(mcPosRef.current.y * H, H - mcH - 4));
-          const f = (px: number) => `${Math.round(px * s)}px`;
-
-          ctx.save();
-          ctx.fillStyle = 'rgba(0,0,0,0.75)';
-          ctx.beginPath();
-          if (ctx.roundRect) ctx.roundRect(mcX, mcY, mcW, mcH, 10);
-          else ctx.rect(mcX, mcY, mcW, mcH);
-          ctx.fill();
-
-          // Header — reflects the locked owner (phase / frame / live).
-          ctx.font = `bold ${f(10)} -apple-system, sans-serif`;
-          ctx.fillStyle = 'rgba(255,255,255,0.4)';
-          const mcTitle = (mcTitleRef.current || 'DATA COLUMN').toUpperCase();
-          ctx.fillText(mcTitle.length > 22 ? mcTitle.slice(0, 21) + '…' : mcTitle, mcX + pad, mcY + Math.round(14 * s));
-
-          // Drag handle dots
-          ctx.fillStyle = 'rgba(255,255,255,0.25)';
-          for (let d = 0; d < 3; d++) ctx.fillRect(mcX + mcW - Math.round(18 * s) + d * Math.round(5 * s), mcY + Math.round(10 * s), 2, 2);
-
-          if (hasItems) {
-            for (let i = 0; i < mcItems.length; i++) {
-              const item = mcItems[i];
-              const y = mcY + Math.round(28 * s) + i * mcLineH;
-              if (item.value === 0 && !item.unit) {
-                ctx.fillStyle = 'rgba(255,255,255,0.8)';
-                ctx.font = `italic ${f(11)} -apple-system, sans-serif`;
-                ctx.fillText(item.label, mcX + pad, y);
-              } else if (item.unit === '' && item.value !== 0) {
-                ctx.fillStyle = 'rgba(255,255,255,0.6)';
-                ctx.font = `${f(11)} -apple-system, sans-serif`;
-                ctx.fillText(item.label, mcX + pad, y);
-                ctx.fillStyle = '#93C5FD';
-                ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
-                ctx.fillText(`${item.value}`, mcX + mcW - pad - ctx.measureText(`${item.value}`).width, y);
-              } else {
-                ctx.fillStyle = 'rgba(255,255,255,0.6)';
-                ctx.font = `${f(11)} -apple-system, sans-serif`;
-                ctx.fillText(item.label, mcX + pad, y);
-                ctx.fillStyle = '#93C5FD';
-                ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
-                const valText = formatAngleValue(item.value, item.unit);
-                ctx.fillText(valText, mcX + mcW - pad - ctx.measureText(valText).width, y);
-              }
-            }
-          } else {
-            ctx.font = `${f(11)} -apple-system, sans-serif`;
-            ctx.fillStyle = 'rgba(255,255,255,0.3)';
-            ctx.fillText('Draw to add measurements', mcX + pad, mcY + Math.round(34 * s));
-          }
-
-          // Resize handle — bottom-right corner (diagonal grip lines).
-          ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-          ctx.lineWidth = 1.5;
-          for (let g = 0; g < 3; g++) {
-            const off = 4 + g * 4;
-            ctx.beginPath();
-            ctx.moveTo(mcX + mcW - off, mcY + mcH - 4);
-            ctx.lineTo(mcX + mcW - 4, mcY + mcH - off);
-            ctx.stroke();
-          }
-
-          ctx.restore();
+          // Shared with the generated video (drawExportOverlay `dataColumn`): same look.
+          drawDataColumnBox(ctx, mcItems, mcTitleRef.current || 'DATA COLUMN', mcX, mcY, s, true);
 
           // Report the column's live CSS-pixel rect so the HTML +/- buttons
           // anchor to it exactly (tracks drag + resize in real time). Convert
@@ -10360,7 +10451,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (webcamActive && webcamPipMobileChrome) queuePipUiSync();
     }, [webcamActive, webcamPipMobileChrome, queuePipUiSync]);
 
-    const zoomBtnSize = precisionTouchDraw ? 32 : 36;
+    // A phone held sideways in a browser leaves ~250 px of height: the bottom-anchored zoom column then
+    // runs off the top of the screen (help, +, − at negative y). On short screens it becomes a row under
+    // the +B / trash row instead, with slightly smaller buttons.
+    const shortScreen = containerHeight > 0 && containerHeight < 420;
+    const zoomBtnSize = shortScreen || precisionTouchDraw ? 32 : 36;
 
     const zoomControlBtnStyle: React.CSSProperties = {
       width: zoomBtnSize,
@@ -10680,11 +10775,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           data-tour-id="tour-zoom"
           style={{
             position: 'absolute',
-            bottom: 'calc(var(--anglemotion-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))',
+            ...(shortScreen
+              ? { top: 'calc(env(safe-area-inset-top, 0px) + 50px)' }
+              : { bottom: 'calc(var(--anglemotion-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))' }),
             right: 'calc(12px + env(safe-area-inset-right, 0px))',
             display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
+            flexDirection: shortScreen ? 'row' : 'column',
+            gap: shortScreen ? 4 : 6,
             zIndex: 90,
             pointerEvents: 'auto',
           }}

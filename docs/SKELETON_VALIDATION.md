@@ -4,6 +4,7 @@
 
 | Check | Rule |
 |---|---|
+| Limb assignment (step 0) | inside each frame: a knee/ankle/elbow/wrist whose bone to its own parent is impossible (ankle/wrist > 1.4 × the thigh/upper arm of that frame; knee/elbow > 1.35 × a rolling median) and clearly shorter the other way (< 0.7, ≥ 0.08 body heights) is swapped back; needs no history, so a swap lasting the whole clip is repaired (KNOWN_ISSUES 081). Genuine crossover steps / folded arms keep real lengths and pass |
 | L/R swap | a pair whose labels jumped to the other side's previous position is swapped back (vs previous *output* frame; persistent swaps stay repaired). Not applied when the sides are < 0.08 body-heights apart (crossing) or the step is tiny |
 | Confidence | score < 0.2 ⇒ invalid |
 | Temporal outlier | > 0.25 body-heights from the midpoint of its valid neighbours (velocity-independent) |
@@ -30,7 +31,7 @@ Real MediaPipe-heavy detections on the Demo clip (desktop CPU; visible = score �
 **Caveat (needs your eyes):** on the small-player run validation hides many more joint-frames (371 vs 169 of 828). There is no ground truth for real footage, so I cannot say how many hidden joints were actually correct. Whether it looks better is a visual judgement on real far-court clips. The thresholds (0.25 / 1.5 / 0.08 / 0.2) are my choices, not tuned on real data.
 
 ## Limitations
-- First-frame L/R swap can't be detected (no previous frame). Player-lock matching still decides the initial player.
+- A first-frame / whole-clip L/R swap is repaired by step 0 only when it breaks bone lengths (wide stance, arms). Mirror-symmetric legs together change no length and cannot be told apart without history. Player-lock matching still decides the initial player.
 - Only applies to AI Track bakes (not live skeleton).
 - Real-footage accuracy and iPhone/Android behaviour need physical-device testing.
 
