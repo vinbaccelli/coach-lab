@@ -698,21 +698,44 @@ interface ToolbarChrome {
   onLockedFeature?: (feature: Feature) => void;
 }
 
+/**
+ * A phone held sideways is ~390 px tall. The footer (screenshot, undo, redo, clear, session, home,
+ * account) is pinned under the tool list, and as a single column of 44 px buttons it took the whole
+ * rail, leaving the tools above it unreachable. Short screens: the footer wraps into two columns
+ * and, if it is still tall, scrolls inside at most 45 % of the rail.
+ */
+function useShortViewport(): boolean {
+  const [short, setShort] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(max-height: 520px)');
+    const sync = () => setShort(mq.matches);
+    sync();
+    mq.addEventListener?.('change', sync);
+    return () => mq.removeEventListener?.('change', sync);
+  }, []);
+  return short;
+}
+
 function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
   const {
     mobileChrome, onScreenshotSave, screenshotSaving, denseMobile, io, rb,
     pressedKey, fire, iconBox, onUndo, onRedo, onClear, onCleanSession, authContent,
   } = chrome;
+  const short = useShortViewport();
   return (
     <div
       style={{
         flexShrink: 0,
+        ...(short
+          ? { display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignContent: 'flex-start', gap: 4, maxHeight: '45%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }
+          : null),
         paddingBottom: mobileChrome
           ? 'calc(4px + env(safe-area-inset-bottom, 0px) + var(--anglemotion-install-banner-height, 0px))'
           : undefined,
       }}
     >
-      <div style={{ height: 1, background: 'var(--cl-border)', margin: '8px 0' }} />
+      <div style={{ height: 1, background: 'var(--cl-border)', margin: '8px 0', ...(short ? { flexBasis: '100%' } : null) }} />
       {onScreenshotSave ? (
         <Row chrome={chrome}
           k="screenshot"
@@ -780,7 +803,7 @@ function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
         </span>
         {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Control Panel</span>}
       </Link>
-      {authContent ? <div style={{ marginTop: 4 }}>{authContent}</div> : null}
+      {authContent ? <div style={{ marginTop: 4, ...(short ? { flexBasis: '100%' } : null) }}>{authContent}</div> : null}
     </div>
   );
 }

@@ -15,7 +15,7 @@ p.on('pageerror', (e) => { console.log('PAGEERROR', e.message); failures++; });
 await p.goto(view.url, { waitUntil: 'domcontentloaded' });
 await p.locator('[role="tab"]').first().waitFor({ timeout: 120000 });
 const tabs = (await p.locator('[role="tab"]').allTextContents()).map((t) => t.replace(/\d+$/, '').trim());
-ok(JSON.stringify(tabs) === JSON.stringify(['Overview', 'Timeline', 'Biometrics', 'Nutrition']), `view-only link: tabs ${JSON.stringify(tabs)}`);
+ok(JSON.stringify(tabs) === JSON.stringify(['Timeline', 'Overview', 'Biometrics', 'Nutrition']), `view-only link: tabs ${JSON.stringify(tabs)}`);
 await p.locator('[role="tab"]:has-text("Timeline")').click();
 await p.waitForTimeout(1200);
 ok((await p.locator('textarea[placeholder="Write a comment…"]').count()) === 0 && (await p.locator('button:has-text("Add picture")').count()) === 0, 'Timeline tab on a view-only link: no add controls');
