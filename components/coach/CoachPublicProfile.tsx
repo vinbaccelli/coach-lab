@@ -44,6 +44,8 @@
  * that produced the deliverable.
  */
 
+import SubscriptionPicker from './SubscriptionPicker';
+import type { SubscriptionOffer } from '@/lib/analysisPricing';
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { CoachRichText } from '@/lib/coach/richText';
@@ -129,6 +131,8 @@ interface DbProfile {
   accentColor: string;
   services: ServiceItem[];
   links: LinkItem[];
+  /** Analysis subscription the coach published (lib/analysisPricing.ts); absent = none. */
+  subscription?: SubscriptionOffer;
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -1363,6 +1367,9 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
         />
       ) : (
         <GenericProfile profile={generic as CoachProfileData} />
+      )}
+      {dbProfile?.subscription?.enabled && (
+        <SubscriptionPicker offer={dbProfile.subscription} accent={dbProfile.accentColor || '#007AFF'} />
       )}
     </div>
   );
