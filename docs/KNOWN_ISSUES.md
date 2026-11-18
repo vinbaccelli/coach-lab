@@ -2471,13 +2471,23 @@ So RTMPose adds about 160–190 MB resident here. It is never released while AI 
 
 **Severity.** High (visible and implausible skeleton on a common view: player seen from behind).
 
+## 083 — Phone: right selection tab hard to grab; expanded toolbar broken
+
+**Found:** 2026-11-01 (coach report).
+
+**Selection tabs (fixed).** Measured in Chromium (390×844 and 844×390, touch emulation): the tabs are the top element at every probed point, before and after moving the playhead; nothing covers them. Each tab is 46×34 px and sits 2 px ABOVE the track. A finger aimed at a tab, especially with the ball right under it, lands a few px lower, on the track, and that press scrubs (moves the ball) instead of grabbing the tab. On a phone each tab's grab area now continues 12 px down into the track's top band (`TAB_TRACK_GRAB_PX`, lib/timelinePress.ts), which lies above the ball (centred, 15 px below the track top), so a press there grabs the tab: 48 px tall in total. Scrubbing, the ball and pinch are unchanged elsewhere. Not reproduced: why the RIGHT tab specifically; iOS edge-swipe navigation near the right screen edge is a candidate that cannot be tested here.
+
+**Expanded toolbar (fixed).** Portrait: expanding PUSHED the layout (rail 60 → 196 px), halving the video and cutting the play-controls row off. Landscape: the actions footer (Screenshot … Control Panel, ~330 px) was pinned and the tool list got zero height, so the tools and the close button were squeezed out (no navigation, no close). Now on a phone the rail keeps its 60 px place and the labelled toolbar OVERLAYS the video, ending above the timeline (measured, `overlayBottomInset`, lib/timelineView.ts); tools and footer form one scrolling column; the close button stays pinned at the top and closes it with one tap. Desktop is unchanged.
+
+**Severity.** Medium.
+
 ## 084 — The player timeline's add controls looked removed (Timeline was the 7th tab, off-screen on a phone)
 
 **Found:** 2026-11-16, coach report: the timeline where comments, pictures, YouTube videos and links are added was "not on the player database anymore".
 
 **Verified root cause.** Nothing was deleted. When the profile became tabs (player database PR C) the Timeline, with its four add controls, became the 7th tab. At 390 px the tab row shows four tabs; the Timeline tab sits off-screen until the row is swiped (reproduced in the real app at phone size on `main`: the default Overview has none of the four controls, the Timeline tab has all four).
 
-**Fix.** The Timeline tab is now the second tab (`components/players/ProfileTabs.tsx`), visible without swiping; guarded by `tests/profileTabs.test.ts`. The coach chose this over repeating the timeline on the Overview.
+**Fix.** The Timeline tab was made the second tab, and on 2026-11-17 (architect's request, PR #209) the FIRST tab, which the profile opens on (`components/players/ProfileTabs.tsx`), visible without swiping; guarded by `tests/profileTabs.test.ts`. The coach chose this over repeating the timeline on the Overview.
 
 **Fault assessment.** Mine (PR C layout): a daily action was put behind a tab that a phone hides.
 

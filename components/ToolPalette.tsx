@@ -824,6 +824,10 @@ function ToolbarLead({ chrome }: { chrome: ToolbarChrome }) {
         }
       </div>
       {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
+        // Expanded on a phone the close button stays pinned at the top while the toolbar scrolls.
+        <div style={compactToolbarChrome && toolbarLabelsExpanded
+          ? { position: 'sticky', top: 0, zIndex: 2, background: '#FFFFFF', paddingBottom: 4 }
+          : { display: 'contents' }}>
         <button
           type="button"
           aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
@@ -850,6 +854,7 @@ function ToolbarLead({ chrome }: { chrome: ToolbarChrome }) {
             <ToolbarChevron expanded={toolbarLabelsExpanded} />
           </span>
         </button>
+        </div>
       ) : null}
     </>
   );
@@ -1260,9 +1265,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   );
   const textMuted = 'var(--cl-text-secondary)';
   const textSubtle = 'var(--cl-text-muted)';
+  // Phone, labels expanded: the whole toolbar (tools AND the actions footer) is ONE
+  // scrolling column. With the footer pinned, a landscape phone's ~390 px gave the
+  // tool list zero height: the tools and the close button were squeezed out.
+  const phoneExpanded = Boolean(compactToolbarChrome && toolbarLabelsExpanded);
   const shellStyle: React.CSSProperties = {
     ...shell,
     ...(mobileChrome ? { flex: 1, minHeight: 0 } : null),
+    ...(phoneExpanded ? { overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' } : null),
     background: 'transparent',
     boxShadow: 'none',
     border: 'none',
@@ -1290,7 +1300,13 @@ export default function ToolPalette(props: ToolPaletteProps) {
     const el = document.createElement('style');
     el.id = id;
     el.textContent =
-      '@keyframes anglemotionToolbarScreenIn{from{opacity:.92;transform:translateX(8px)}to{opacity:1;transform:none}}';
+      '@keyframes anglemotionToolbarScreenIn{from{opacity:.92;transform:translateX(8px)}to{opacity:1;transform:none}}'
+      // Phone, labels expanded: the tool list keeps its full height inside the one scrolling shell.
+      // Phone, labels expanded: the tool list is flattened into the one scrolling shell
+      // (display:contents), so the pinned close button's sticky parent is the whole shell
+      // and it stays on screen while the actions footer scrolls by.
+      + '[data-phone-expanded]{gap:6px;padding:0 10px}'
+      + '[data-phone-expanded]>.anglemotion-toolbar-scroll{display:contents!important}';
     document.head.appendChild(el);
   }, []);
   const resetNav = useCallback(() => { setNavStack(['home']); onNavigateBack?.('home'); }, [onNavigateBack]);
@@ -1415,7 +1431,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'recording' && recordingHubContent) {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1436,7 +1452,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     // so it needs its own resolution rather than reading off `styleVals`.
     const pulseVal = styleMode && styleSelection ? styleSelection.spinning : !!circleSpinning;
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1580,7 +1596,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'draw') {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1721,7 +1737,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'angle') {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1736,7 +1752,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'skeleton') {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1847,7 +1863,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'tools') {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1868,7 +1884,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
      */
     const panDragArmed = activeTool === 'pan' && panDragEnabled;
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1939,7 +1955,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'stromotion') {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1972,7 +1988,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'aimetrics') {
     const metricIcon = denseMobile || io ? 16 : 18;
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -2045,7 +2061,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   /* ── Home ─────────────────────────────────────────────────────────── */
   return (
-    <div style={shellStyle}>
+    <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
       <CollapseControl chrome={chrome} />
       <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
         <ToolbarLead chrome={chrome} />
