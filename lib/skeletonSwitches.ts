@@ -9,12 +9,15 @@
  *                      display stays on the live path — isolates what a second decoder costs the main video
  *   ?live=rtmpose-t | ?live=rtmpose-s   EXPERIMENT: RTMPose (ONNX wasm, in a worker) drives the LIVE skeleton instead of MoveNet; ?live=off back to the default
  *   ?la_lead=2.5   look-ahead target lead in VIDEO seconds (0.04–3); ?la_lead=auto back to one measured round trip
+ *   ?tag=presented  EXPERIMENT: AI Track tags each sample with the time of the frame the browser actually presented (when it reports it)
+ *                   instead of the time it asked for; ?tag=asked back to the default (KNOWN_ISSUES 076)
  * Remove once the skeleton work is accepted.
  */
 export const LEGACY_KEY = 'anglemotion:skeleton-legacy';
 export const LOOKAHEAD_ON_KEY = 'anglemotion:lookahead-on';
 export const LOOKAHEAD_LEAD_KEY = 'anglemotion:lookahead-lead';
 export const LIVE_ENGINE_KEY = 'anglemotion:live-engine';
+export const TAG_KEY = 'anglemotion:bake-tag';
 
 /** Apply `?legacy=` / `?lookahead=` from the current URL to localStorage (idempotent, never throws). */
 export function applyUrlSwitches(): void {
@@ -32,6 +35,9 @@ export function applyUrlSwitches(): void {
     if (live === 'rtmpose-t' || live === 'rtmpose-s') ls.setItem(LIVE_ENGINE_KEY, live);
     else if (live === 'off') ls.setItem(LIVE_ENGINE_KEY, 'off'); // explicit opt-out → MoveNet
     else if (live === 'default') ls.removeItem(LIVE_ENGINE_KEY);
+    const tag = q.get('tag');
+    if (tag === 'presented') ls.setItem(TAG_KEY, 'presented');
+    else if (tag === 'asked') ls.removeItem(TAG_KEY);
     const lead = q.get('la_lead');
     if (lead !== null) {
       const n = Number(lead);
@@ -44,6 +50,12 @@ export function applyUrlSwitches(): void {
 export function legacyOn(): boolean {
   applyUrlSwitches();
   try { return typeof window !== 'undefined' && (!!(window as unknown as { __skeletonLegacy?: boolean }).__skeletonLegacy || window.localStorage.getItem(LEGACY_KEY) === '1'); } catch { return false; }
+}
+
+/** AI Track sample time tag: false (default) = the time asked for; true (`?tag=presented`) = the presented frame's own time. */
+export function tagPresentedOn(): boolean {
+  applyUrlSwitches();
+  try { return typeof window !== 'undefined' && window.localStorage.getItem(TAG_KEY) === 'presented'; } catch { return false; }
 }
 
 /** The experimental look-ahead is OFF unless explicitly switched on. */
