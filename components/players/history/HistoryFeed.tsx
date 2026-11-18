@@ -1,5 +1,6 @@
 'use client';
 
+import DriveImage from '@/components/reports/DriveImage';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { SlidersHorizontal, X } from 'lucide-react';
 import {
@@ -163,7 +164,12 @@ export default function HistoryFeed({ fetchPage, viewer, sections = [...HISTORY_
         </span>
       </div>
       {t.body ? <p style={{ margin: '4px 0 0', fontSize: 13, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{t.body}</p> : null}
-      {t.imageUrl ? (
+      {t.imageUrl && t.type === 'report' ? (
+        // A saved analysis screenshot is usually a Drive link, which a browser can refuse to hot-link:
+        // DriveImage retries through Drive's image host and the Supabase copy, then shows a tile with an
+        // "Open image" link instead of a broken-image icon.
+        <div style={{ marginTop: 6, maxWidth: 560 }}><DriveImage url={t.imageUrl} fallbackUrl={t.imageFallbackUrl} alt={t.title} /></div>
+      ) : t.imageUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={t.imageUrl} alt="" loading="lazy" style={{ marginTop: 6, maxWidth: '100%', maxHeight: t.type === 'meal' ? 200 : 360, borderRadius: 10, display: 'block' }} />
       ) : null}

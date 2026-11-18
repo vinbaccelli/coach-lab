@@ -18,6 +18,7 @@
  * Order: the day the item is about (newest first), then when it was created, then the key, so a
  * page boundary is exact. The cursor is that triple.
  */
+import { entryImages } from '@/lib/reports/deriveBlocks';
 import { MEAL_LABELS, type MealCategory } from '@/lib/players/nutrition';
 import { describeEntry, formatValue, type TrackerDefinition, type TrackerEntry } from '@/lib/players/trackers';
 import type { SharePermissions } from '@/lib/players/sharePermissions';
@@ -46,6 +47,8 @@ export interface HistoryItem {
   title: string;
   body?: string;
   imageUrl?: string;
+  /** A second copy of the same image (Supabase `player-assets`), tried when the first fails to load. */
+  imageFallbackUrl?: string;
   youtubeId?: string;
   author: 'coach' | 'link';
   status?: 'submitted' | 'approved' | 'needs_revision';
@@ -155,11 +158,16 @@ export function itemFromTimeline(r: { id: string; kind: string; body: string | n
   };
 }
 
-export function itemFromReport(r: { id: string; category: string | null; folder_label: string | null; body_text: string | null; created_at: string }): HistoryItem {
+/** The line the analysis app writes on a screenshot-only entry; the picture is the content. */
+const SCREENSHOT_NOTE = 'Screenshot from analysis session.';
+
+export function itemFromReport(r: { id: string; category: string | null; folder_label: string | null; body_text: string | null; created_at: string; screenshots?: unknown }): HistoryItem {
+  const image = entryImages({ id: r.id, created_at: r.created_at, screenshots: r.screenshots })[0];
+  const text = r.body_text && r.body_text.trim() !== SCREENSHOT_NOTE ? r.body_text.slice(0, 280) : undefined;
   return {
     key: `e-${r.id}`, type: 'report', section: 'technical', date: day(r.created_at), created_at: isoMs(r.created_at),
     title: `${r.category === 'match' ? 'Match' : 'Technical'} report${r.folder_label ? `: ${r.folder_label}` : ''}`,
-    body: r.body_text ? r.body_text.slice(0, 280) : undefined, author: 'coach',
+    body: text, imageUrl: image?.url, imageFallbackUrl: image?.fallbackUrl, author: 'coach',
   };
 }
 
