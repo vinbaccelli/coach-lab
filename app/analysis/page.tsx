@@ -23,6 +23,7 @@ import { ERASER_SIZE_DEFAULT } from '@/lib/eraser';
 import ToolPalette, { type BallTrailMode, type WebcamPipMode } from '@/components/ToolPalette';
 import PreciseTimeline from '@/components/PreciseTimeline';
 import { playWithSound, routeFor } from '@/lib/videoSound';
+import { iosDeviceNow, cameraConstraints } from '@/lib/iosSystemMic';
 const RecordingHubContent = React.lazy(() => import('@/components/RecordingHub').then(m => ({ default: m.RecordingHubContent })));
 import { useRecording, RECORDING_AUDIO_CONSTRAINTS, FLOATING_CAMERA_WINDOW } from '@/contexts/RecordingContext';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
@@ -223,6 +224,7 @@ import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/res
 import { racketWorkerEnabled } from '@/lib/stroMotionDraft/racketWorkerClient';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
+import { useStandaloneDisplay } from '@/lib/useStandaloneDisplay';
 import { SHRINK_TIER_KEY, lowerTier, parseTier, shrinkTarget, tierLabel, DEFAULT_PHONE_TIER } from '@/lib/phoneShrink/tier';
 import { probeVideo, shrinkVideoFile, type ShrinkHandle } from '@/lib/phoneShrink/shrink';
 
@@ -493,7 +495,7 @@ function Home() {
   const [activeTool, setActiveTool]       = useState<ToolType>('select');
   const [drawingOptions, setDrawingOptions] = useState<DrawingOptions>({
     color: '#F8F8F8',
-    lineWidth: 3,
+    lineWidth: 1,
     fontSize: 24,
     dashed: false,
     arrowAtEnd: false,
@@ -4184,6 +4186,7 @@ function Home() {
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
   }, []);
+  const standaloneApp = useStandaloneDisplay();
   const precisionAvailable = isMobile && coarsePointer;
 
   // Never leave the mode latched on a device that can no longer drive it
@@ -5343,17 +5346,17 @@ function Home() {
 
   const startWebcam = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: RECORDING_AUDIO_CONSTRAINTS,
-      });
+      // iOS: video only. The page opening the mic takes it from the iPhone's own Screen Recording
+      // (silent voice, "asset writer failing to save").
+      const ios = iosDeviceNow();
+      const stream = await navigator.mediaDevices.getUserMedia(cameraConstraints(ios, RECORDING_AUDIO_CONSTRAINTS));
       webcamStreamRef.current = stream;
       if (webcamVideoRef.current) {
         webcamVideoRef.current.srcObject = stream;
         await webcamVideoRef.current.play().catch(() => {});
       }
       setWebcamActive(true);
-      setMicActive(true);
+      setMicActive(stream.getAudioTracks().length > 0);
       setMicMuted(false);
       stream.getAudioTracks().forEach((t) => {
         t.enabled = true;
@@ -5391,6 +5394,10 @@ function Home() {
   }, [webcamActive, startWebcam, stopWebcam]);
 
   const startMic = useCallback(async () => {
+    if (iosDeviceNow()) {
+      setProcessingStatus("On iPhone the page does not open the microphone: use the iPhone Screen Recording's mic (long-press the record button in Control Center).");
+      return;
+    }
     try {
       // Recording constraints, not the browser's call-tuned defaults — this is the
       // track startRecording prefers above every other source.
@@ -7695,6 +7702,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
         height: '100dvh',
         minHeight: 0,
         overflow: 'hidden',
+        // Installed app only: keep the toolbar and the right-hand controls clear of the camera island
+        // in landscape (browser tabs already do this themselves; see lib/standaloneDisplay.ts).
+        ...(standaloneApp ? { paddingLeft: 'env(safe-area-inset-left, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)', boxSizing: 'border-box' as const } : null),
         background: '#FFFFFF',
         color: '#1D1D1F',
         userSelect: 'none',

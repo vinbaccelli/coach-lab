@@ -2473,3 +2473,15 @@ So RTMPose adds about 160–190 MB resident here. It is never released while AI 
 **Text box vanished on a finger (fixed).** Reproduced in Chromium with a 180 ms touch (CDP): pointerdown → the new text box takes focus → pointerup → the browser's compatibility mousedown on the canvas → the box blurs, commits empty and unmounts. The draft's focus guard only covered the first animation frame, and a real finger lifts later. A finger/pen pointerdown with the Text tool is now cancelled (`preventDefault`), which suppresses those compatibility mouse events. A quick synthetic tap (the earlier test) never showed it. Toolbar: Text is now right after Style in the Draw list, and Text size is the first option in Style when Text is active (still hidden in the icon-only rail, as before).
 
 **Severity.** High (core drawing on the phone).
+
+## 084 — The player timeline's add controls looked removed (Timeline was the 7th tab, off-screen on a phone)
+
+**Found:** 2026-11-16, coach report: the timeline where comments, pictures, YouTube videos and links are added was "not on the player database anymore".
+
+**Verified root cause.** Nothing was deleted. When the profile became tabs (player database PR C) the Timeline, with its four add controls, became the 7th tab. At 390 px the tab row shows four tabs; the Timeline tab sits off-screen until the row is swiped (reproduced in the real app at phone size on `main`: the default Overview has none of the four controls, the Timeline tab has all four).
+
+**Fix.** The Timeline tab was made the second tab, and on 2026-11-17 (architect's request, PR #209) the FIRST tab, which the profile opens on (`components/players/ProfileTabs.tsx`), visible without swiping; guarded by `tests/profileTabs.test.ts`. The coach chose this over repeating the timeline on the Overview.
+
+**Fault assessment.** Mine (PR C layout): a daily action was put behind a tab that a phone hides.
+
+**Severity.** High (a daily action looked gone), fixed.
