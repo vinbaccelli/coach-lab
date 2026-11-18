@@ -69,6 +69,6 @@ test('switch off = export unchanged: no dataColumn passed, Canvas draws the colu
   assert.match(exp, /if \(opts\.dataColumn\) \{/);
   assert.equal((exp.match(/drawColumn\(ctx,/g) ?? []).length, 2, 'only those two places draw it');
   // One drawing function for the screen and the video.
-  assert.match(canvas, /drawDataColumnBox\(ctx, mcItems, mcTitleRef\.current \|\| 'DATA COLUMN', mcX, mcY, s, true\)/);
+  assert.match(canvas, /drawDataColumnBox\(ctx, mcItems, mcTitleRef\.current \|\| 'DATA COLUMN', mcX, mcY, s, mcSelectedRef\.current\)/);
   assert.match(exp, /drawDataColumnBox\(c, rows, title, x, y, col\.scale, false\)/);
 });

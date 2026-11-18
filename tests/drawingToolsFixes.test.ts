@@ -22,13 +22,13 @@ test('data column: the corner resizes only while selected; 44 px square on a fin
   assert.equal(dataColumnHit({ x: 250 - 20, y: 170 - 20 }, col, { headerH: 26, touch: false, selected: true }), 'resize');
 });
 
-test('data column: dragging keeps it fully inside the video picture', () => {
+test('data column: dragging keeps it fully inside the canvas, black bars included', () => {
   const canvas = { w: 1000, h: 600 };
   const video = { dx: 100, dy: 0, dw: 800, dh: 600 };
   const size = { w: 150, h: 120 };
-  assert.deepEqual(clampColumnPos({ x: 0, y: 0 }, size, canvas, video), { x: 0.1, y: 0 });
+  assert.deepEqual(clampColumnPos({ x: 0, y: 0 }, size, canvas, video), { x: 0, y: 0 }, 'the black bar beside the video is usable');
   const far = clampColumnPos({ x: 0.99, y: 0.99 }, size, canvas, video);
-  assert.equal(far.x * canvas.w, 900 - 150);
+  assert.equal(far.x * canvas.w, 1000 - 150);
   assert.equal(far.y * canvas.h, 600 - 120);
   assert.deepEqual(clampColumnPos({ x: 0.5, y: 0.5 }, size, canvas, video), { x: 0.5, y: 0.5 }, 'inside: unchanged');
   assert.deepEqual(clampColumnPos({ x: 0.5, y: 0.5 }, size, canvas, null), { x: 0.5, y: 0.5 }, 'no video box: canvas');
