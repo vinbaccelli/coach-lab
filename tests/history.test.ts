@@ -102,3 +102,12 @@ test('a screenshot report shows its picture and not the boilerplate note', async
   assert.equal(noteOnly.imageUrl, undefined);
   assert.equal(noteOnly.body, 'Great set');
 });
+
+test('a report whose screenshot has a Drive and a Supabase copy keeps the Supabase one as the fallback', async () => {
+  const { itemFromReport } = await import('../lib/players/history');
+  const drive = 'https://drive.google.com/uc?export=view&id=1AbCdEfGhIjKlMnOp';
+  const supa = 'https://x.supabase.co/storage/v1/object/public/player-assets/a.png';
+  const it = itemFromReport({ id: 'e9', category: 'technique', folder_label: null, body_text: null, created_at: '2026-11-17T11:05:00Z', screenshots: [drive, supa] });
+  assert.equal(it.imageUrl, drive);
+  assert.equal(it.imageFallbackUrl, supa);
+});

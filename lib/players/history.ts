@@ -47,6 +47,8 @@ export interface HistoryItem {
   title: string;
   body?: string;
   imageUrl?: string;
+  /** A second copy of the same image (Supabase `player-assets`), tried when the first fails to load. */
+  imageFallbackUrl?: string;
   youtubeId?: string;
   author: 'coach' | 'link';
   status?: 'submitted' | 'approved' | 'needs_revision';
@@ -165,7 +167,7 @@ export function itemFromReport(r: { id: string; category: string | null; folder_
   return {
     key: `e-${r.id}`, type: 'report', section: 'technical', date: day(r.created_at), created_at: isoMs(r.created_at),
     title: `${r.category === 'match' ? 'Match' : 'Technical'} report${r.folder_label ? `: ${r.folder_label}` : ''}`,
-    body: text, imageUrl: image?.url, author: 'coach',
+    body: text, imageUrl: image?.url, imageFallbackUrl: image?.fallbackUrl, author: 'coach',
   };
 }
 
