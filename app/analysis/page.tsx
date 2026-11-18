@@ -225,6 +225,7 @@ import { racketWorkerEnabled } from '@/lib/stroMotionDraft/racketWorkerClient';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
 import { useStandaloneDisplay } from '@/lib/useStandaloneDisplay';
+import { FIRST_USE_EVENT } from '@/lib/reviewPrompt';
 import { SHRINK_TIER_KEY, lowerTier, parseTier, shrinkTarget, tierLabel, DEFAULT_PHONE_TIER } from '@/lib/phoneShrink/tier';
 import { probeVideo, shrinkVideoFile, type ShrinkHandle } from '@/lib/phoneShrink/shrink';
 
@@ -697,6 +698,11 @@ function Home() {
   useEffect(() => {
     setEmbedReadyA(false);
   }, [youtubeVideoIdA, genericEmbedSrcA, videoSrc]);
+
+  // The first video loaded is the user's "first real use": the review card (components/ReviewPrompt.tsx) listens.
+  useEffect(() => {
+    if (videoSrc) window.dispatchEvent(new Event(FIRST_USE_EVENT));
+  }, [videoSrc]);
 
   useEffect(() => {
     if (videoSrc || (!youtubeVideoIdA && !genericEmbedSrcA)) return;
