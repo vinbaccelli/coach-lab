@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
-import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
+import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, ARROW_HEAD, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { computeSkeletonAngles, formatAngleValue } from '@/lib/skeletonAngles';
 import { emitTourSignal, reportTourState } from '@/lib/tourSignals';
@@ -28,6 +28,8 @@ import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
 import { PoseWorkerBridge, terminateGlobalPoseWorker, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
+import { counterZoomScale } from '@/lib/precisionCursorScale';
+import { constantSizeContext, getMarkScale, setMarkScale } from '@/lib/markScale';
 import { PRECISION_HOLD_MS as _PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX as _PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX as _PRECISION_HOLD_MAX_TRAVEL_PX, DoubleTapDetector as _DoubleTapDetector } from '@/lib/precisionHold';
 import { getPoseDetector } from '@/lib/poseDetection';
 import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
@@ -1305,7 +1307,7 @@ function drawSmoothPath(
   // Arrow at the end: the head of the last segment's direction (the path's final piece is
   // straight along it). The line stops at the head's base and the head's area is clipped
   // out of it, so nothing shows through the head.
-  const head = arrowAtEnd ? arrowHeadGeometry(points[n - 2], last, arrowHeadLength(width, 12, 3)) : null;
+  const head = arrowAtEnd ? arrowHeadGeometry(points[n - 2], last, arrowHeadLength(width, ARROW_HEAD.swing.min, ARROW_HEAD.swing.per) * getMarkScale()) : null;
   if (head) { ctx.save(); clipOutArrowHead(ctx, head); }
 
   ctx.beginPath();
@@ -1543,7 +1545,7 @@ type ContextualTarget =
 
 const DEFAULT_CONTEXTUAL_SNAPSHOT: ContextualStyleSnapshot = {
   color: '#FFFFFF',
-  lineWidth: 3,
+  lineWidth: 1,
   opacity: 1,
   dashed: false,
   spinning: false,
@@ -1990,7 +1992,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, joi
     applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
     // The line stops at the head's base, with the head's area clipped out of it, so it
     // never shows through or past the head (any width, opacity, dash, angle).
-    const head = arrowHeadGeometry(p1, p2, arrowHeadLength(lw, 14, 2));
+    const head = arrowHeadGeometry(p1, p2, arrowHeadLength(lw, ARROW_HEAD.arrow.min, ARROW_HEAD.arrow.per) * getMarkScale());
     if (!head) {
       drawThickSegmentWithEraser(ctx, p1.x, p1.y, p2.x, p2.y, eraserStrokes);
     } else if (head.shaftEnd) {
@@ -7075,27 +7077,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        // Completed strokes
+        // Completed strokes + marks in progress: constant size on screen at every zoom (lib/markScale.ts).
+        const markK = counterZoomScale(zoomRef.current);
+        const mctx = constantSizeContext(ctx, markK);
+        setMarkScale(markK);
         const jointBallR = jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh);
+        try {
         // The swing path's time range follows the video's clock (undefined without one: drawn as before).
         const drawingsTime = drawingVideoTime();
-        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current, jointBallR, drawingsTime);
+        for (const s of strokesRef.current) drawStroke(mctx, s, animTickRef.current, jointBallR, drawingsTime);
 
         // Active (in-progress) stroke
-        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, animTickRef.current, jointBallR);
+        if (activeStrokeRef.current) drawStroke(mctx, activeStrokeRef.current, animTickRef.current, jointBallR);
 
         // Swing path being drawn
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
           const pts = swingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
+          drawSmoothPath(mctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
         // Manual swing path being drawn
         if (manualSwingActiveRef.current && manualSwingPtsRef.current.length > 0) {
           const pts = manualSwingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
+          drawSmoothPath(mctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
         // Joint chain in progress
@@ -7105,7 +7111,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const opts = drawingOptsRef.current;
           const previewNodes = cursor ? [...pts, cursor] : pts;
           drawJointChainStroke(
-            ctx,
+            mctx,
             {
               tool: 'jointChain',
               nodes: previewNodes,
@@ -7119,6 +7125,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             jointBallR,
           );
         }
+        } finally { setMarkScale(1); }
 
         // Locked angle measurements
         for (const m of angleMeasRef.current) drawAngleMeas(ctx, m);
@@ -7378,10 +7385,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
 
           const drawPt = disp ?? tgt;
+          // Counter the zoom about the crosshair's own centre: constant size on screen.
+          const curInv = counterZoomScale(zoomRef.current);
           if (drawPt && cursorAlpha > 0.04) {
             const px = drawPt.x;
             const py = drawPt.y;
             ctx.save();
+            ctx.translate(px, py);
+            ctx.scale(curInv, curInv);
+            ctx.translate(-px, -py);
             ctx.globalAlpha = cursorAlpha;
             ctx.strokeStyle = 'rgba(0,0,0,0.55)';
             ctx.lineWidth = 2.5;
@@ -7416,6 +7428,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const r = 12 + t * 36;
               const a = (1 - t) * 0.55 * cursorAlpha;
               ctx.save();
+              ctx.translate(rip.x, rip.y);
+              ctx.scale(curInv, curInv);
+              ctx.translate(-rip.x, -rip.y);
               ctx.globalAlpha = a;
               ctx.strokeStyle = 'rgba(255,255,255,0.9)';
               ctx.lineWidth = 2;
@@ -10436,7 +10451,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (webcamActive && webcamPipMobileChrome) queuePipUiSync();
     }, [webcamActive, webcamPipMobileChrome, queuePipUiSync]);
 
-    const zoomBtnSize = precisionTouchDraw ? 32 : 36;
+    // A phone held sideways in a browser leaves ~250 px of height: the bottom-anchored zoom column then
+    // runs off the top of the screen (help, +, − at negative y). On short screens it becomes a row under
+    // the +B / trash row instead, with slightly smaller buttons.
+    const shortScreen = containerHeight > 0 && containerHeight < 420;
+    const zoomBtnSize = shortScreen || precisionTouchDraw ? 32 : 36;
 
     const zoomControlBtnStyle: React.CSSProperties = {
       width: zoomBtnSize,
@@ -10756,11 +10775,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           data-tour-id="tour-zoom"
           style={{
             position: 'absolute',
-            bottom: 'calc(var(--anglemotion-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))',
+            ...(shortScreen
+              ? { top: 'calc(env(safe-area-inset-top, 0px) + 50px)' }
+              : { bottom: 'calc(var(--anglemotion-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))' }),
             right: 'calc(12px + env(safe-area-inset-right, 0px))',
             display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
+            flexDirection: shortScreen ? 'row' : 'column',
+            gap: shortScreen ? 4 : 6,
             zIndex: 90,
             pointerEvents: 'auto',
           }}
