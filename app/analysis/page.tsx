@@ -667,6 +667,9 @@ function Home() {
    * under a stray drag.
    */
   const [panModeEnabled, setPanModeEnabled] = useState(true);
+  // The hand button in the zoom controls (components/Canvas.tsx): drag the video at any time.
+  const [handPanActive, setHandPanActive] = useState(false);
+  const toggleHandPan = useCallback(() => setHandPanActive((v) => !v), []);
   const [youtubeVideoIdA, setYoutubeVideoIdA] = useState<string | null>(null);
   const [youtubeVideoIdB, setYoutubeVideoIdB] = useState<string | null>(null);
   const [genericEmbedSrcA, setGenericEmbedSrcA] = useState<string | null>(null);
@@ -8098,6 +8101,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   showTourHelpInZoomCluster={toursEnabled}
                   poseFrameSkip={hasVideoBContent ? 1 : 0}
                   panModeEnabled={panModeEnabled}
+                  handPanActive={handPanActive}
+                  onHandPanToggle={toggleHandPan}
                   onPanModeToggle={() => setPanModeEnabled((p) => !p)}
                   onObjMultiplierRegionSelected={() => setObjMultiplierHasRegion(true)}
                   videoSourceKey={videoSrc}
@@ -8879,6 +8884,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       webcamPipBottomInsetPx={toolbarBottomReservePx}
                       poseFrameSkip={1}
                       panModeEnabled={panModeEnabled}
+                  handPanActive={handPanActive}
+                  onHandPanToggle={toggleHandPan}
                       onPanModeToggle={() => setPanModeEnabled((p) => !p)}
                       videoSourceKey={videoSrcB}
                     />
