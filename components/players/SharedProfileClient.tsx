@@ -13,7 +13,7 @@ import NutritionSection from '@/components/players/nutrition/NutritionSection';
 import HistoryFeed, { type HistoryPage } from '@/components/players/history/HistoryFeed';
 import { HISTORY_SECTIONS } from '@/lib/players/history';
 import { playerNutritionClient } from '@/components/players/nutrition/nutritionClient';
-import ProfileTabs, { isProfileTab, type ProfileTab } from '@/components/players/ProfileTabs';
+import ProfileTabs, { DEFAULT_PROFILE_TAB, PROFILE_TABS, isProfileTab, type ProfileTab } from '@/components/players/ProfileTabs';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
 type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null; trackers?: Tracker[]; trackerEntries?: TrackerEntry[]; trackersAvailable?: boolean; permissions?: SharePermissions };
@@ -54,7 +54,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
   const picRef = useRef<HTMLInputElement>(null);
   const vidRef = useRef<HTMLInputElement>(null);
   // The same tabs as the coach's profile; the link's page shows only the ones it may see (kept in ?tab=).
-  const [tab, setTab] = useState<ProfileTab>('overview');
+  const [tab, setTab] = useState<ProfileTab>(DEFAULT_PROFILE_TAB);
   useEffect(() => { const t = new URLSearchParams(window.location.search).get('tab'); if (isProfileTab(t)) setTab(t); }, []);
 
   const headers = useCallback((): Record<string, string> => (email.trim() ? { 'x-share-email': email.trim() } : {}), [email]);
@@ -138,7 +138,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
   if ((perms?.see.biometrics ?? true) && hasTrackers('biometrics')) availTabs.push('biometrics');
   if ((perms?.see.fitness ?? true) && hasTrackers('fitness')) availTabs.push('fitness');
   if (perms?.see.nutrition) availTabs.push('nutrition');
-  const activeTab: ProfileTab = availTabs.includes(tab) ? tab : 'overview';
+  const activeTab: ProfileTab = availTabs.includes(tab) ? tab : (PROFILE_TABS.find((t) => availTabs.includes(t.id))?.id ?? 'overview');
   const changeTab = (t: ProfileTab) => { setTab(t); try { const u = new URL(window.location.href); u.searchParams.set('tab', t); window.history.replaceState(null, '', u.toString()); } catch { /* the tab still changes */ } };
   const myEntries = (data.trackerEntries ?? []).filter((e) => e.author === 'link');
   const waiting = myEntries.filter((e) => e.status === 'submitted').length;
