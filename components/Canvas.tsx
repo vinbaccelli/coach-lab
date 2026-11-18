@@ -39,7 +39,7 @@ import { modeLabel, lookAheadDecodeOnly, lookAheadLeadOverride, liveEngineSwitch
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
 import { liveColumnRows, overlayTransform, type ColumnRow, type VideoBox } from '@/lib/exportOverlay';
-import { HelpCircle } from 'lucide-react';
+import { HelpCircle, Hand } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, pickStroVideoMime, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
 import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
@@ -636,6 +636,9 @@ export interface CanvasProps {
   poseFrameSkip?: number;
   /** When true, one-finger touch / click-drag pans the canvas instead of drawing */
   panModeEnabled?: boolean;
+  /** The hand toggle in the zoom controls: while on, a one-finger / mouse drag moves the video with ANY tool. */
+  handPanActive?: boolean;
+  onHandPanToggle?: () => void;
   /** Callback to toggle pan mode from the on-canvas UI */
   onPanModeToggle?: () => void;
   /** When true, render guided-tour ? at top of zoom cluster (analysis mobile/desktop). */
@@ -2423,6 +2426,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       onDrawCommitted,
       poseFrameSkip = 0,
       panModeEnabled = false,
+      handPanActive = false,
+      onHandPanToggle,
       onPanModeToggle,
       onObjMultiplierRegionSelected,
       showTourHelpInZoomCluster = false,
@@ -3112,6 +3117,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // the render loop composites at the webcam's fps instead of display rate.
     const webcamFrameDirtyRef = useRef(false);
     const panModeEnabledRef = useRef(panModeEnabled);
+    const handPanActiveRef = useRef(handPanActive);
     /** Pixel rect on the backing canvas; (0,0,0,0) means “use default lower-right” */
     const webcamPipRectRef = useRef({ x: 0, y: 0, w: 0, h: 0 });
     /** Stable identity for registerWebcamPipPresentation (see that prop). */
@@ -3435,6 +3441,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // stream is (re)attached when it remounts after cutout is turned off.
     }, [webcamActive, webcamVideoRef, webcamCutout]);
     useEffect(() => { panModeEnabledRef.current = panModeEnabled; }, [panModeEnabled]);
+    useEffect(() => { handPanActiveRef.current = handPanActive; }, [handPanActive]);
     useEffect(() => { onObjMultRegionSelectedRef.current = onObjMultiplierRegionSelected; }, [onObjMultiplierRegionSelected]);
 
     useEffect(() => {
@@ -9168,7 +9175,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           (tool === 'zoom' && e.button === 0 && zoomed) ||
           // The pan tool, with its drag toggle on. Works at ANY zoom level —
           // no prior zoom-in required.
-          (tool === 'pan' && panModeEnabledRef.current)
+          (tool === 'pan' && panModeEnabledRef.current) ||
+          // The hand toggle in the zoom controls: drag the video at any time, whatever tool is armed.
+          (handPanActiveRef.current && e.button === 0)
         );
       if (shouldPan) {
         isPanningRef.current = true;
@@ -10548,7 +10557,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             cursor:
               activeTool === 'objectMultiplier'
                 ? 'default'
-                : (activeTool === 'pan' && panModeEnabled)
+                : ((activeTool === 'pan' && panModeEnabled) || handPanActive)
                   ? (isPanningRef.current ? 'grabbing' : 'grab')
                   : (cursorFor[activeTool] ?? 'default'),
           }}
@@ -10872,6 +10881,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           >
             ⌂
           </button>
+          {onHandPanToggle ? (
+            <button
+              type="button"
+              aria-label="Drag the video (hand)"
+              aria-pressed={handPanActive}
+              title={handPanActive ? 'Hand on: drag moves the video. Tap to go back to your tool.' : 'Hand: drag moves the video, with any tool'}
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={onHandPanToggle}
+              style={{
+                ...zoomControlBtnStyle,
+                background: handPanActive ? 'var(--cl-accent, #007AFF)' : zoomControlBtnStyle.background,
+              }}
+            >
+              <Hand size={18} strokeWidth={2.25} aria-hidden />
+            </button>
+          ) : null}
         </div>
         {/* One-tap way back from any canvas zoom, top-left under the top bar:
             the bottom-right ⌂ can be under a fixed banner (iOS "Add to Home

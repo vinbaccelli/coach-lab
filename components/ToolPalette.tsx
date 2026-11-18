@@ -2075,14 +2075,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
           inside the screen claims the tool now.
         */}
         <Row chrome={chrome}
-          k="pan-h"
-          active={activeTool === 'pan'}
-          icon={<Hand size={denseMobile ? 16 : 18} />}
-          tooltip="Pan and zoom the video frame"
-          label="Pan / Zoom"
-          onPress={() => { onExitDrawContext?.(); push('pan'); }}
-        />
-        <Row chrome={chrome}
           k="met-h"
           active={activeTool === 'skeleton'}
           icon={<BarChart3 size={denseMobile ? 16 : 20} />}
