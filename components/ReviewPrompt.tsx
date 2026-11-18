@@ -5,7 +5,8 @@ import { usePathname } from 'next/navigation';
 import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { TRUSTPILOT_PROFILE_URL } from '@/lib/trustpilot';
 import {
-  isReviewPromptPath, parseReviewPromptState, reviewPromptKey, shouldShowReviewPrompt,
+  FIRST_USE_EVENT, isReviewPromptPath, parseReviewPromptState, reviewPromptKey, shouldShowAfterFirstUse, shouldShowReviewPrompt,
+  type ReviewPromptState,
 } from '@/lib/reviewPrompt';
 
 /**
@@ -26,19 +27,38 @@ export default function ReviewPrompt() {
     return () => { cancelled = true; };
   }, []);
 
+  const read = (uid: string): ReviewPromptState | null => {
+    try { return parseReviewPromptState(localStorage.getItem(reviewPromptKey(uid))); } catch { return null; }
+  };
+  const write = (uid: string, state: ReviewPromptState) => {
+    try { localStorage.setItem(reviewPromptKey(uid), JSON.stringify(state)); } catch { /* private mode */ }
+  };
+
+  // 1 — right at the start (first sign-in), and once a month after a "Not now".
   useEffect(() => {
     if (!userId || !isReviewPromptPath(pathname)) { setOpen(false); return; }
-    let state = null;
-    try { state = parseReviewPromptState(localStorage.getItem(reviewPromptKey(userId))); } catch { /* private mode */ }
-    if (!shouldShowReviewPrompt(state, Date.now())) return;
-    // A few seconds in, so it never lands on top of the first thing the user does.
-    const t = setTimeout(() => setOpen(true), 6000);
+    if (!shouldShowReviewPrompt(read(userId), Date.now())) return;
+    // A moment in, so the page has drawn first.
+    const t = setTimeout(() => setOpen(true), 1500);
     return () => clearTimeout(t);
   }, [userId, pathname]);
 
+  // 2 — once more after the first real use: the analysis page announces that a video was loaded.
+  useEffect(() => {
+    if (!userId) return;
+    const onUse = () => {
+      const st = read(userId);
+      if (!shouldShowAfterFirstUse(st)) return;
+      write(userId, { ...(st ?? {}), firstUseShown: true });
+      setTimeout(() => setOpen(true), 4000);
+    };
+    window.addEventListener(FIRST_USE_EVENT, onUse);
+    return () => window.removeEventListener(FIRST_USE_EVENT, onUse);
+  }, [userId]);
+
   const save = (done: boolean) => {
     if (!userId) return;
-    try { localStorage.setItem(reviewPromptKey(userId), JSON.stringify({ lastAt: Date.now(), ...(done ? { done: true } : {}) })); } catch { /* ignore */ }
+    write(userId, { ...(read(userId) ?? {}), lastAt: Date.now(), ...(done ? { done: true } : {}) });
   };
 
   if (!open) return null;

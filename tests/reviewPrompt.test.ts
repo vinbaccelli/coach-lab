@@ -29,3 +29,13 @@ test('only on signed-in app pages, not on public pages or the sign-in flow', () 
   for (const p of ['/analysis', '/players', '/players/abc', '/dashboard', '/billing']) assert.equal(isReviewPromptPath(p), true, p);
   for (const p of ['/', '/login', '/auth/callback', '/share/abc', '/privacy', '/terms', '/pricing', '/r/xyz', '/coach/vin', '/coaches']) assert.equal(isReviewPromptPath(p), false, p);
 });
+
+import { shouldShowAfterFirstUse } from '../lib/reviewPrompt';
+
+test('after the first real use it asks once more, unless done or already asked then', () => {
+  assert.equal(shouldShowAfterFirstUse(null), true);
+  assert.equal(shouldShowAfterFirstUse({ lastAt: 5 }), true, 'a "Not now" at sign-in does not stop the first-use ask');
+  assert.equal(shouldShowAfterFirstUse({ firstUseShown: true }), false);
+  assert.equal(shouldShowAfterFirstUse({ done: true }), false);
+  assert.deepEqual(parseReviewPromptState('{"firstUseShown":true}'), { firstUseShown: true });
+});
