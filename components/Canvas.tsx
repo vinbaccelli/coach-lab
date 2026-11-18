@@ -10445,7 +10445,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (webcamActive && webcamPipMobileChrome) queuePipUiSync();
     }, [webcamActive, webcamPipMobileChrome, queuePipUiSync]);
 
-    const zoomBtnSize = precisionTouchDraw ? 32 : 36;
+    // A phone held sideways in a browser leaves ~250 px of height: the bottom-anchored zoom column then
+    // runs off the top of the screen (help, +, − at negative y). On short screens it becomes a row under
+    // the +B / trash row instead, with slightly smaller buttons.
+    const shortScreen = containerHeight > 0 && containerHeight < 420;
+    const zoomBtnSize = shortScreen || precisionTouchDraw ? 32 : 36;
 
     const zoomControlBtnStyle: React.CSSProperties = {
       width: zoomBtnSize,
@@ -10765,11 +10769,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           data-tour-id="tour-zoom"
           style={{
             position: 'absolute',
-            bottom: 'calc(var(--anglemotion-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))',
+            ...(shortScreen
+              ? { top: 'calc(env(safe-area-inset-top, 0px) + 50px)' }
+              : { bottom: 'calc(var(--anglemotion-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))' }),
             right: 'calc(12px + env(safe-area-inset-right, 0px))',
             display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
+            flexDirection: shortScreen ? 'row' : 'column',
+            gap: shortScreen ? 4 : 6,
             zIndex: 90,
             pointerEvents: 'auto',
           }}
