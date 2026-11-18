@@ -56,3 +56,21 @@ test('legacy implies look-ahead disabled even if switched on; mode label says wh
   assert.match(modeLabel(false), /look-ahead OFF \(default\)/);
   applyUrlSwitches();
 });
+
+import { tagPresentedOn, TAG_KEY } from '../lib/skeletonSwitches';
+
+test('AI Track sample tag: the asked time by default; ?tag=presented persists, ?tag=asked clears (KNOWN_ISSUES 076)', () => {
+  assert.equal(tagPresentedOn(), false, 'no window: default');
+  const st = fakeWindow('?debug=1');
+  assert.equal(tagPresentedOn(), false, 'default is the asked time');
+  fakeWindow('?tag=presented', st);
+  assert.equal(tagPresentedOn(), true);
+  assert.equal(st[TAG_KEY], 'presented');
+  fakeWindow('', st);
+  assert.equal(tagPresentedOn(), true, 'persists without the link parameter');
+  fakeWindow('?tag=asked', st);
+  assert.equal(tagPresentedOn(), false);
+  assert.equal(TAG_KEY in st, false);
+  fakeWindow('?tag=nonsense', st);
+  assert.equal(tagPresentedOn(), false, 'unknown values change nothing');
+});

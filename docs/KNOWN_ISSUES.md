@@ -2379,6 +2379,15 @@ column are still never exported.
 
 **Decision (architect):** after V1.
 
+**Update 2026-11-15 — reported again (coach, iPhone screenshot of a generated video: "the skeleton always slowly joins the player"). Two code findings and one change.**
+
+1. *Sample time tag ≠ frame time (measured, desktop).* The AI Track pass tagged every baked sample with the time it ASKED for (`video.currentTime` after the seek), not with the time of the frame the browser actually presented. `?vdebug=1` frame log, Chromium, VP9 clip, 30 fps sampling: presented `mediaTime` − asked time = −33 … +33 ms, mean about +14 ms (the presented frame is usually LATER), so the skeleton shows the pose of a slightly later frame: it leads the player, which is the symptom in this entry. Playback (`lookupBakedPose(video.currentTime)`) and Generate (`lookupBakedPose(mediaTime)`) read the track by time, so the tag is the only thing that sets the alignment.
+2. *The first sample skipped the paint wait.* Every other sample waits for the painted frame (`seekTo`: `seeked` + one `requestVideoFrameCallback`; the iPhone panel shows `seek: frame not ready (rs=4, not painted)`), but the first one (the probe, which also seeds the crop tracker) waited only for `seeked`, after the longest seek of the pass.
+
+**Change (`app/analysis/page.tsx`, `lib/analysisFrameLog.ts`, `lib/skeletonSwitches.ts`).** The first seek now has the same paint wait; samples are still tagged with the asked time by default; the new link switch `?tag=presented` tags them with the presented frame's own time (`mediaTime`, asked time where the browser gives none) for a phone experiment. `?legacy=1` keeps the old first-seek wait. Debug only (`?debug=1` panel): `AI Track first sample: asked … · video at … · readyState …` and `AI Track timing: presented frame vs asked time · mean … ms · max … ms over N samples`; the `?vdebug=1` log of the AI Track pass now also records its first 6 seeks (new optional parameter, the default keeps "every 10th").
+
+**Not proven.** The measured offset is small on desktop (a fraction of a frame; and the browser gave a presented-frame time for only 35 of 181 samples, the rest hit the existing 300 ms fallback); whether it is the whole "slowly joins" effect on the iPhone is unknown. The `AI Track timing` line on the phone answers it: if mean/max there are tens of ms (and most samples have a frame time), run the same clip with `?tag=presented` and compare; if they are ~0, tagging was not the cause and the next suspect is the one still open (edge behaviour of the centred smoothing at the start of a track, and the crop tracker's first box). A/B on the phone: the same clip with `&legacy=1` and without (legacy also turns off the other skeleton changes).
+
 **Severity.** Medium (visual accuracy at the start of a track).
 
 ---
@@ -2472,7 +2481,19 @@ So RTMPose adds about 160–190 MB resident here. It is never released while AI 
 
 **Text box vanished on a finger (fixed).** Reproduced in Chromium with a 180 ms touch (CDP): pointerdown → the new text box takes focus → pointerup → the browser's compatibility mousedown on the canvas → the box blurs, commits empty and unmounts. The draft's focus guard only covered the first animation frame, and a real finger lifts later. A finger/pen pointerdown with the Text tool is now cancelled (`preventDefault`), which suppresses those compatibility mouse events. A quick synthetic tap (the earlier test) never showed it. Toolbar: Text is now right after Style in the Draw list, and Text size is the first option in Style when Text is active (still hidden in the icon-only rail, as before).
 
+**Follow-up (2026-11-18, architect's phone test).** The column could not be moved out of the video picture (it was clamped to it), so the empty bars above/below a small video were unusable. `clampColumnPos` now clamps to the whole canvas; the generated video still keeps the column inside the video frame (`drawColumn` in `components/Canvas.tsx`).
+
 **Severity.** High (core drawing on the phone).
+
+## 083 — Phone: right selection tab hard to grab; expanded toolbar broken
+
+**Found:** 2026-11-01 (coach report).
+
+**Selection tabs (fixed).** Measured in Chromium (390×844 and 844×390, touch emulation): the tabs are the top element at every probed point, before and after moving the playhead; nothing covers them. Each tab is 46×34 px and sits 2 px ABOVE the track. A finger aimed at a tab, especially with the ball right under it, lands a few px lower, on the track, and that press scrubs (moves the ball) instead of grabbing the tab. On a phone each tab's grab area now continues 12 px down into the track's top band (`TAB_TRACK_GRAB_PX`, lib/timelinePress.ts), which lies above the ball (centred, 15 px below the track top), so a press there grabs the tab: 48 px tall in total. Scrubbing, the ball and pinch are unchanged elsewhere. Not reproduced: why the RIGHT tab specifically; iOS edge-swipe navigation near the right screen edge is a candidate that cannot be tested here.
+
+**Expanded toolbar (fixed).** Portrait: expanding PUSHED the layout (rail 60 → 196 px), halving the video and cutting the play-controls row off. Landscape: the actions footer (Screenshot … Control Panel, ~330 px) was pinned and the tool list got zero height, so the tools and the close button were squeezed out (no navigation, no close). Now on a phone the rail keeps its 60 px place and the labelled toolbar OVERLAYS the video, ending above the timeline (measured, `overlayBottomInset`, lib/timelineView.ts); tools and footer form one scrolling column; the close button stays pinned at the top and closes it with one tap. Desktop is unchanged.
+
+**Severity.** Medium.
 
 ## 084 — The player timeline's add controls looked removed (Timeline was the 7th tab, off-screen on a phone)
 
