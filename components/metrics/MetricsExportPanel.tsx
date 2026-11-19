@@ -68,6 +68,11 @@ export type ExportSnapshot = {
 export interface MetricsExportPanelProps {
   /** The analysis video's source (blob: URL for an upload, or a file URL). */
   videoSrc: string | null;
+  /**
+   * The file as picked, when `videoSrc` is a smaller working copy (a phone opens at 720p). A preset
+   * bigger than the working copy is rendered from it, so 1080p is real 1080p. Null: no such file.
+   */
+  original?: { url: string; w: number; h: number } | null;
   /** Set when the source cannot be exported (YouTube/embed); shown as the reason. */
   exportBlockedReason: string | null;
   /** Metrics section handles, read-only ("Use section"). */
@@ -135,7 +140,7 @@ const PLACEHOLDER_OPTIONS: Array<{ id: ExportQuality; label: string; width?: num
 ];
 
 export default function MetricsExportPanel({
-  videoSrc, exportBlockedReason, sectionStart, sectionEnd, snapshotCount, snapshotMarks, getSnapshotsForExport, getLiveColumnForExport,
+  videoSrc, original = null, exportBlockedReason, sectionStart, sectionEnd, snapshotCount, snapshotMarks, getSnapshotsForExport, getLiveColumnForExport,
   onSnapshotReport, timelineRate, pauseAnalysisVideo, onClose, isMobile = false, overlay = null,
 }: MetricsExportPanelProps) {
   const previewRef = useRef<HTMLVideoElement | null>(null);
@@ -274,10 +279,14 @@ export default function MetricsExportPanel({
     ));
   }, []);
 
-  const options = useMemo(() => (meta ? exportQualityOptions(meta.w, meta.h) : []), [meta]);
+  const options = useMemo(() => (meta ? exportQualityOptions(original?.w ?? meta.w, original?.h ?? meta.h) : []), [meta, original]);
   useEffect(() => {
     if (!options.length || quality) return;
+    // With a bigger original behind a smaller working copy, 1080p is the coach's choice (it decodes the
+    // original, the heavy step on a phone): the default stays at what the working copy can give.
     const p1080 = options.find((o) => o.id === '1080p');
+    const p720 = options.find((o) => o.id === '720p');
+    if (original && p720 && !p720.disabled && meta && Math.min(meta.w, meta.h) < 1080) { setQuality('720p'); return; }
     setQuality(p1080 && !p1080.disabled ? '1080p' : 'original');
   }, [options, quality]);
   const selected = options.find((o) => o.id === quality) ?? null;
@@ -627,7 +636,11 @@ export default function MetricsExportPanel({
       }
       setPhase('reading');
       setStage('Reading video…');
-      const src = await (await fetch(videoSrc, { signal: ac.signal })).blob();
+      // A preset bigger than the working copy is rendered from the original file.
+      const workShort = Math.min(meta.w, meta.h);
+      const wantShort = Math.min(selected.width, selected.height);
+      const fromOriginal = Boolean(original) && wantShort > workShort + 2;
+      const src = await (await fetch(fromOriginal && original ? original.url : videoSrc, { signal: ac.signal })).blob();
       if (ac.signal.aborted) throw new DOMException('Aborted', 'AbortError');
       setPhase('exporting');
       const whole = range.start <= 0.01 && range.end >= meta.duration - 0.01;
