@@ -4771,6 +4771,16 @@ function Home() {
   // (1080p, or 720p / 540p on a phone that was stopped by its memory) before it opens. Off a phone
   // the file opens exactly as before, synchronously.
   const [shrinkState, setShrinkState] = useState<{ pct: number; label: string } | null>(null);
+  // The file as the coach picked it, when the working copy is a smaller one (see loadVideoFileIntoSlot).
+  const exportOriginalRef = useRef<{ forUrl: string; file: File; w: number; h: number } | null>(null);
+  const [exportOriginal, setExportOriginal] = useState<{ url: string; w: number; h: number } | null>(null);
+  useEffect(() => {
+    const o = exportOriginalRef.current;
+    if (!metricsExportOpen || !o || o.forUrl !== videoSrc || !(o.w > 0) || !(o.h > 0)) { setExportOriginal(null); return; }
+    const url = URL.createObjectURL(o.file);
+    setExportOriginal({ url, w: o.w, h: o.h });
+    return () => { URL.revokeObjectURL(url); setExportOriginal(null); };
+  }, [metricsExportOpen, videoSrc]);
   const shrinkHandleRef = useRef<ShrinkHandle>({ cancel: () => {} });
   const loadVideoFileIntoSlot = useCallback((file: File, target: 'A' | 'B') => {
     const forced = parseTier(new URLSearchParams(window.location.search).get('shrink'));
@@ -4778,6 +4788,7 @@ function Home() {
     if (!isPhone && !forced) { loadVideoFileIntoSlotNow(file, target); return; }
     void (async () => {
       let toLoad = file;
+      let originalSize: { w: number; h: number } | null = null;
       try {
         let stored: ReturnType<typeof parseTier> = null;
         try {
@@ -4785,6 +4796,7 @@ function Home() {
           stored = parseTier(window.localStorage.getItem(SHRINK_TIER_KEY));
         } catch { /* storage blocked */ }
         const info = await probeVideo(file);
+        if (info) originalSize = { w: info.w, h: info.h };
         const t = info ? shrinkTarget({ isPhone, stored, forced, nativeW: info.w, nativeH: info.h, durationSec: info.sec }) : null;
         if (t) {
           const label = tierLabel(t.tier);
@@ -4797,6 +4809,9 @@ function Home() {
         setShrinkState(null);
       }
       loadVideoFileIntoSlotNow(toLoad, target);
+      // The picked file is read from disk, so holding it costs almost no memory: Generate renders
+      // 1080p from it when the working copy is smaller (a phone opens at 720p).
+      if (target === 'A') exportOriginalRef.current = toLoad !== file && lastBlobUrlARef.current ? { forUrl: lastBlobUrlARef.current, file, w: originalSize?.w ?? 0, h: originalSize?.h ?? 0 } : null;
     })();
   }, [loadVideoFileIntoSlotNow]);
 
@@ -10157,7 +10172,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
             maxWidth: 'calc(100vw - 24px)',
           }}
         >
-          <span>Optimizing the video for your phone ({shrinkState.label})… {shrinkState.pct}%</span>
+          <span>Loading…</span>
           <button
             type="button"
             onClick={() => shrinkHandleRef.current.cancel()}
@@ -10349,6 +10364,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       {metricsExportOpen && (
         <MetricsExportPanel
           videoSrc={html5FileUpload ? videoSrc : null}
+          original={exportOriginal}
           exportBlockedReason={youtubeVideoIdA || genericEmbedSrcA
             ? 'This is a YouTube or embedded video, so it can’t be exported here. Upload the video file to export it.'
             : null}

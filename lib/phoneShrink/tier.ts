@@ -2,7 +2,8 @@
  * PHONE VIDEO SHRINK — which size a phone should work at. Pure logic, no side effects.
  *
  * A phone cannot say how much memory it has (iOS hides `deviceMemory`), and two phones with the
- * same RAM behave differently. So: a phone starts at 1080p, and every time the phone's memory
+ * same RAM behave differently. So: a phone starts at 720p (the working copy; Generate can still render
+ * 1080p from the original file), and every time the phone's memory
  * kills the page during Auto-detect (phoneBudget.ts already records that) the stored tier drops one
  * step. A coach can force a tier with `?shrink=720` (remembered). Off a phone nothing is shrunk,
  * unless `?shrink=` forces it (used to test on a desktop).
@@ -11,7 +12,7 @@
 /** Tier = the long edge, in px, of the shrunk video (720p = 1280, 1080p = 1920, 540p = 960). */
 export const SHRINK_TIERS = [1920, 1280, 960] as const;
 export type ShrinkTier = (typeof SHRINK_TIERS)[number];
-export const DEFAULT_PHONE_TIER: ShrinkTier = 1920;
+export const DEFAULT_PHONE_TIER: ShrinkTier = 1280;
 export const SHRINK_TIER_KEY = 'anglemotion:shrinkTier';
 /** Clips longer than this are not shrunk (the result is kept in memory); they open as they are. */
 export const SHRINK_MAX_SECONDS = 5 * 60;
