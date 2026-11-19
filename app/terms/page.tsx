@@ -1,9 +1,11 @@
 import Link from 'next/link';
+import { pageMetadata } from '@/lib/seo/site';
 
-export const metadata = {
+export const metadata = pageMetadata({
   title: 'Terms of Service — AngleMotion',
   description: 'Terms of service for the AngleMotion coaching platform.',
-};
+  path: '/terms',
+});
 
 export default function TermsPage() {
   return (

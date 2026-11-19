@@ -1,0 +1,54 @@
+/* Public blog. Uses the design tokens (styles/tokens.css); blue is for actions and links only (DESIGN.md "One Voice"). */
+.blog-shell { min-height: 100vh; display: flex; flex-direction: column; background: var(--cl-bg-panel); color: var(--cl-text-primary); }
+.blog-header { border-bottom: 1px solid var(--cl-border-subtle); }
+.blog-nav { max-width: 920px; margin: 0 auto; padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.blog-wordmark { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 18px; color: var(--cl-text-primary); text-decoration: none; letter-spacing: -0.01em; }
+.blog-accent { color: var(--cl-accent); }
+.blog-nav-links { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.blog-nav-links a { color: var(--cl-text-secondary); text-decoration: none; font-size: 14px; }
+.blog-nav-links a:hover { color: var(--cl-text-primary); }
+.blog-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 20px; border-radius: 12px; background: var(--cl-action-primary); color: var(--cl-text-on-fill) !important; font-weight: 600; font-size: 15px; text-decoration: none; }
+.blog-btn-sm { min-height: 36px; padding: 0 14px; font-size: 14px; }
+.blog-main { flex: 1; width: 100%; max-width: 720px; margin: 0 auto; padding: 36px 20px 64px; }
+.blog-main h1 { font-size: clamp(28px, 5vw, 40px); line-height: 1.15; letter-spacing: -0.02em; margin: 6px 0 14px; }
+.blog-lede { font-size: 18px; line-height: 1.5; color: var(--cl-text-secondary); margin: 0 0 22px; }
+.blog-meta, .blog-byline { font-size: 14px; color: var(--cl-text-secondary); margin: 0 0 6px; }
+.blog-byline { margin-bottom: 26px; }
+.blog-meta a, .blog-byline a, .blog-prose a, .blog-card h2 a:hover, .blog-author a { color: var(--cl-accent); }
+.blog-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 26px; }
+.blog-chips a { padding: 6px 14px; border-radius: 999px; background: var(--cl-bg-secondary); color: var(--cl-text-primary); text-decoration: none; font-size: 14px; }
+.blog-card { padding: 20px 0; border-top: 1px solid var(--cl-border-subtle); }
+.blog-card h2 { font-size: 22px; line-height: 1.25; margin: 4px 0 8px; letter-spacing: -0.01em; }
+.blog-card h2 a { color: var(--cl-text-primary); text-decoration: none; }
+.blog-card p { margin: 0; color: var(--cl-text-secondary); line-height: 1.5; }
+.blog-card .blog-meta { margin-bottom: 2px; }
+.blog-prose { font-size: 18px; line-height: 1.7; }
+.blog-prose h2 { font-size: 26px; line-height: 1.25; margin: 40px 0 12px; letter-spacing: -0.01em; }
+.blog-prose h3 { font-size: 20px; margin: 28px 0 8px; }
+.blog-prose h4 { font-size: 17px; margin: 22px 0 6px; }
+.blog-prose p, .blog-prose ul, .blog-prose ol, .blog-prose blockquote, .blog-prose pre { margin: 0 0 18px; }
+.blog-prose ul, .blog-prose ol { padding-left: 24px; }
+.blog-prose li { margin-bottom: 6px; }
+.blog-prose blockquote { padding: 4px 18px; border-left: 3px solid var(--cl-border); color: var(--cl-text-secondary); }
+.blog-prose img { max-width: 100%; height: auto; border-radius: 12px; }
+.blog-prose hr { border: 0; border-top: 1px solid var(--cl-border-subtle); margin: 32px 0; }
+.blog-prose code { background: var(--cl-bg-secondary); padding: 2px 6px; border-radius: 6px; font-size: 0.9em; }
+.blog-prose pre { background: var(--cl-bg-secondary); padding: 14px 16px; border-radius: 12px; overflow-x: auto; }
+.blog-prose pre code { background: none; padding: 0; }
+.blog-cta, .blog-author { margin: 40px 0 0; padding: 22px; border-radius: 16px; background: var(--cl-bg-secondary); }
+.blog-cta h2, .blog-author h2 { font-size: 20px; margin: 0 0 8px; }
+.blog-cta p, .blog-author p { margin: 0 0 14px; color: var(--cl-text-secondary); line-height: 1.5; }
+.blog-author p:last-child { margin-bottom: 0; }
+.blog-main section[aria-label="Related articles"] { margin-top: 44px; }
+.blog-main section[aria-label="Related articles"] > h2 { font-size: 20px; margin-bottom: 4px; }
+.blog-footer { border-top: 1px solid var(--cl-border-subtle); padding: 24px 20px 40px; text-align: center; font-size: 14px; color: var(--cl-text-secondary); }
+.blog-footer-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 22px; margin-bottom: 12px; }
+.blog-footer-links a { color: var(--cl-text-secondary); text-decoration: none; }
+.blog-footer-links a:hover { color: var(--cl-text-primary); }
+@media (max-width: 520px) { .blog-prose { font-size: 17px; } .blog-nav-links { gap: 12px; } }
+
+/* Tailwind's base reset sets every heading to font-weight: inherit; restore a clear hierarchy. */
+.blog-main h1 { font-weight: 700; }
+.blog-main h2, .blog-main h3, .blog-main h4 { font-weight: 650; }
+.blog-card h2 { font-weight: 650; }
+.blog-main strong, .blog-prose strong { font-weight: 650; }

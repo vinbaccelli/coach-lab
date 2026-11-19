@@ -2506,3 +2506,45 @@ So RTMPose adds about 160–190 MB resident here. It is never released while AI 
 **Fault assessment.** Mine (PR C layout): a daily action was put behind a tab that a phone hides.
 
 **Severity.** High (a daily action looked gone), fixed.
+
+## 085 — Unknown URLs return the login page with HTTP 200 (soft 404)
+
+**Found:** 2026-11-18, SEO audit of the live site (found while working on something else).
+
+**Symptom.** `GET /nonexistent-page-xyz` on anglemotion.com answers `200` with the sign-in page (after a redirect to `/login?redirect=%2Fnonexistent-page-xyz`). A crawler is told every possible URL exists.
+
+**Verified root cause.** `middleware.ts` lets only the public-path list through (lines 14–39) and redirects every other path to `/login` for a signed-out visitor (lines 65–69). A path that matches no route is "not public", so it never reaches Next's 404.
+
+**Fault assessment.** Design side effect, not a bug in one change. Impact on search is limited since 2026-11-19: `/login` is `noindex` (`app/login/page.tsx`), so these URLs are not indexed, but they still waste crawl budget and return the wrong status.
+
+**Proposed fix (NOT done, needs approval).** Return a real 404 for paths that are not a known app route. That means an allow-list of protected prefixes in the middleware, and a mistake there would make a protected route PUBLIC (fail open). Needs a security review and a test that every `app/*` directory is classified. `tests/seoSite.test.ts` already checks that each gated top-level route is in `lib/seo/robots.ts`, which is a start.
+
+**Severity.** Low to medium (SEO hygiene; no data exposure).
+
+## 086 — anglemotion.com and www.anglemotion.com serve identical pages (no redirect between them)
+
+**Found:** 2026-11-18, SEO audit of the live site.
+
+**Symptom.** Both hosts return `200` with the same 70,261-byte home page. Search engines can treat them as duplicate sites.
+
+**Verified root cause.** Both domains are attached to the same Vercel project without a redirect; the code cannot fix this (a `www` redirect belongs in Vercel → Domains).
+
+**Mitigation in code (2026-11-19).** Every page now declares a canonical URL on `https://www.anglemotion.com` (`lib/seo/site.ts`, `app/layout.tsx`).
+
+**Proposed fix (NOT done, a production setting for the owner).** Vercel → Project → Settings → Domains: set `anglemotion.com` to redirect (308) to `www.anglemotion.com`. If the apex should be canonical instead, change `SITE_URL` in `lib/seo/site.ts` and redirect the other way.
+
+**Severity.** Medium (SEO), mitigated by canonicals.
+
+## 087 — The coach profile offers a €10 credit for 5-star reviews
+
+**Found:** 2026-11-18, SEO audit (the offer is in `lib/coach/curated/vinbaccelli.ts`, block `review-bonus`, and in the profile menu).
+
+**Symptom.** The public profile says: "Leave a 5-star review on Trustpilot and Google, send me a screenshot, and I will credit €10 toward any service."
+
+**Verified root cause.** Business copy, not code. Trustpilot's legal pages state that incentivised reviews are not allowed, including discounts or credits, and that businesses must not choose to invite only people likely to be positive (https://legal.trustpilot.com/for-reviewers/guidelines-for-reviewers). Google's policy was NOT checked.
+
+**Fault assessment.** A content decision for the owner. It puts the Trustpilot profile, and the "All reviews on Trustpilot are 5 stars" line on the landing page (`components/LandingPage.tsx`), at risk of review removal or a flag.
+
+**Proposed fix (NOT done, owner's decision).** Remove or reword the offer (for example, thank reviewers without tying a credit to a rating) and ask for reviews from all customers, whatever the rating.
+
+**Severity.** Medium (reputation/compliance).

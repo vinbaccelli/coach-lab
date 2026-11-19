@@ -1,5 +1,12 @@
 import PricingClient from './PricingClient';
 import { getLivePrices } from '@/lib/billing/livePrices';
+import { pageMetadata } from '@/lib/seo/site';
+
+export const metadata = pageMetadata({
+  title: 'Pricing – AngleMotion',
+  description: 'Three plans for players, coaches and academies. Every tool is free for one hour first: no card, no booking.',
+  path: '/pricing',
+});
 
 // Rendered per request so a Stripe hiccup is never frozen into a static page;
 // the prices themselves come from the one-hour data cache (no Stripe call per

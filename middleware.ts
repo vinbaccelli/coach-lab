@@ -26,6 +26,7 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith('/privacy') ||
     pathname.startsWith('/terms') ||
     pathname.startsWith('/coaches') ||
+    pathname.startsWith('/blog') ||       // public Academy Blog (app/blog); static pages, no auth
     pathname.startsWith('/coach/') ||
     pathname.startsWith('/share/') ||     // a player's share link (token in the URL; app/share/[token], app/api/share)
     pathname.startsWith('/r/') ||         // affiliate links (app/r/[code]/route.ts)

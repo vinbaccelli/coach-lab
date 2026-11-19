@@ -1,5 +1,9 @@
 import CoachPublicProfile from '@/components/coach/CoachPublicProfile';
+import type { Metadata } from 'next';
+import JsonLd from '@/components/blog/JsonLd';
+import { getCuratedProfile } from '@/lib/coach/curated';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { absoluteUrl, DEFAULT_OG_IMAGE, DEFAULT_OG_IMAGE_SIZE, SITE_NAME } from '@/lib/seo/site';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +33,33 @@ interface CoachLinkRow {
   url: string;
   icon: string | null;
   sort_order: number;
+}
+
+/**
+ * Unique title and description for curated profiles, read from static data, so
+ * this adds no database query. Other coaches keep the site defaults until a
+ * per-coach title is wanted (that would need a query; not done here).
+ */
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  const profile = getCuratedProfile(slug);
+  if (!profile) return {};
+  const title = `${profile.name} – ${profile.role} | ${SITE_NAME}`;
+  const url = absoluteUrl(`/coach/${slug}`);
+  return {
+    title,
+    description: profile.directoryBlurb,
+    alternates: { canonical: url },
+    openGraph: {
+      type: 'profile',
+      siteName: SITE_NAME,
+      url,
+      title,
+      description: profile.directoryBlurb,
+      images: [{ url: absoluteUrl(DEFAULT_OG_IMAGE), ...DEFAULT_OG_IMAGE_SIZE }],
+    },
+    twitter: { card: 'summary_large_image', title, description: profile.directoryBlurb },
+  };
 }
 
 export default async function CoachPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -83,5 +114,27 @@ export default async function CoachPage({ params }: { params: Promise<{ slug: st
     }
   }
 
-  return <CoachPublicProfile slug={slug} dbProfile={dbProfile} />;
+  const curated = getCuratedProfile(slug);
+  return (
+    <>
+      {curated && (
+        <JsonLd
+          data={{
+            '@context': 'https://schema.org',
+            '@type': 'ProfilePage',
+            mainEntity: {
+              '@type': 'Person',
+              name: curated.name,
+              url: absoluteUrl(`/coach/${slug}`),
+              jobTitle: curated.role,
+              description: curated.directoryBlurb,
+              worksFor: { '@type': 'Organization', name: SITE_NAME, url: absoluteUrl('/') },
+              sameAs: curated.socials.filter((s) => s.icon !== 'whatsapp').map((s) => s.url),
+            },
+          }}
+        />
+      )}
+      <CoachPublicProfile slug={slug} dbProfile={dbProfile} />
+    </>
+  );
 }
