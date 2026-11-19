@@ -2471,6 +2471,8 @@ So RTMPose adds about 160–190 MB resident here. It is never released while AI 
 
 **Severity.** High (visible and implausible skeleton on a common view: player seen from behind).
 
+**Follow-up (2026-11-19, architect's export of an ATP serve).** The X came back at the serve's kick-back: the clip had normal frames first, then the pose jumped. Step 0 swapped the ankles inside the frame, then step 1 (left/right swap against the previous frame, one joint pair at a time) swapped the knees back to match the previous frame but not the ankles, leaving each knee joined to the other leg's ankle. Fix: the in-frame limb check (`fixLimbAssignment`, `lib/skeletonValidate.ts`) now runs a second time after step 1. Regression: `tests/skeletonKickX.test.ts` (fails before, passes after). Reproduced from joint positions read off the export, not from the original video; the original clip was not available.
+
 ## 082 — Drawing tools on a phone: precision blocked selecting, data column hard to move, text box vanished
 
 **Found:** 2026-11-01 (coach report).
