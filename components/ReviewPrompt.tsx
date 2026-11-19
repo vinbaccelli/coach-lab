@@ -18,6 +18,14 @@ export default function ReviewPrompt() {
   const pathname = usePathname() ?? '/';
   const [userId, setUserId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  // Never over the welcome card, the tour list or a tutorial step: a first visit used to show them together.
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const check = () => setBusy(!!document.querySelector('[data-tour-card], [aria-labelledby="anglemotion-welcome-title"], [aria-labelledby="anglemotion-tours-title"]'));
+    check();
+    const t = window.setInterval(check, 700);
+    return () => window.clearInterval(t);
+  }, []);
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -61,14 +69,18 @@ export default function ReviewPrompt() {
     write(userId, { ...(read(userId) ?? {}), lastAt: Date.now(), ...(done ? { done: true } : {}) });
   };
 
-  if (!open) return null;
+  if (!open || busy) return null;
   return (
     <div
       role="dialog"
       aria-label="Review AngleMotion"
       style={{
         position: 'fixed', zIndex: 99990, left: 12, right: 12, margin: '0 auto', maxWidth: 420,
-        top: 'calc(env(safe-area-inset-top, 0px) + 10px)',
+        // Where it covers the least: on the player and list screens, at the bottom above the round ? button
+        // (not over the sticky tab bar). The analysis screen is dense everywhere, so there it stays at the top.
+        ...(pathname.startsWith('/analysis')
+          ? { top: 'calc(env(safe-area-inset-top, 0px) + 10px)' }
+          : { bottom: 'calc(env(safe-area-inset-bottom, 0px) + 76px)' }),
         padding: '12px 14px', borderRadius: 14, background: '#fff', color: '#1D1D1F',
         border: '1px solid rgba(0,0,0,0.12)', boxShadow: '0 8px 28px rgba(0,0,0,0.22)',
         fontFamily: 'inherit',
