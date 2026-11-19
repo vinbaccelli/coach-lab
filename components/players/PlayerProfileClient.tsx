@@ -23,6 +23,9 @@ import type { PlayerSession } from '@/lib/sessions/types';
 import { useEntitlement } from '@/lib/useEntitlement';
 import PlanLockedNotice from '@/components/PlanLockedNotice';
 import { REPORTS_IN_APP } from '@/lib/featureFlags';
+import BlueprintTab from './BlueprintTab';
+import BlueprintChecks from './BlueprintChecks';
+import { sanitizeBlueprint, type PlayerBlueprint } from '@/lib/players/blueprint';
 import { parseTechnicalSheet, defaultTechnicalSheet, migrateOldDefault, resetToStandard, needsReset, labelTaken, makeRow, addTrackEntry, removeTrackEntry, entriesNewestFirst, type TechnicalSheetRow } from '@/lib/players/technicalSheet';
 import ReorderList from '@/components/players/ReorderList';
 import { parseOrder } from '@/lib/players/reorder';
@@ -43,6 +46,8 @@ type Player = {
   google_folder_id?: string | null;
   /** Editable Technical Sheet rows (jsonb). */
   technical_sheet?: unknown;
+  /** Blueprint: chosen variants + fundamentals marks (jsonb, lib/players/blueprint.ts). */
+  blueprint?: unknown;
   /** Extra profile rows (name/value) — null until the coach adds one. */
   profile_fields?: unknown;
   /** Manual timeline order (list of item keys) — null = newest first. */
@@ -103,6 +108,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
   const [creatingSession, setCreatingSession] = useState(false);
   const [sheet, setSheet] = useState<TechnicalSheetRow[] | null>(null);
   const [sheetSaving, setSheetSaving] = useState(false);
+  // Blueprint (chosen variants + the checks marked against it). Saved on every change, newest wins.
+  const [blueprint, setBlueprint] = useState<PlayerBlueprint | null>(null);
   // Extra profile rows (Nationality, …). Seeded once from the old Nationality / Playing hand columns.
   const [profileRows, setProfileRows] = useState<TechnicalSheetRow[] | null>(null);
   const [profileDirty, setProfileDirty] = useState(false);
@@ -136,6 +143,28 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [player, sheet]);
+
+  useEffect(() => {
+    if (player && blueprint === null) setBlueprint(sanitizeBlueprint(player.blueprint));
+  }, [player, blueprint]);
+
+  const changeBlueprint = useCallback(async (next: PlayerBlueprint) => {
+    setBlueprint(next); // shown at once; the save follows
+    setErr(null);
+    try {
+      const res = await fetch(`/api/players/${playerId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blueprint: next }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message ?? data.error ?? 'Could not save the blueprint (has the database update been run?)');
+      }
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : 'Could not save the blueprint');
+    }
+  }, [playerId]);
 
   const saveSheet = useCallback(async (rows: TechnicalSheetRow[]) => {
     setSheetSaving(true);
@@ -728,6 +757,8 @@ export default function PlayerProfileClient({ playerId }: { playerId: string }) 
       </div>
       ) : null}
 
+      {tab === 'technical' && blueprint ? <BlueprintChecks blueprint={blueprint} onChange={(n) => void changeBlueprint(n)} canEdit={canEdit} /> : null}
+      {tab === 'blueprint' && blueprint ? <BlueprintTab blueprint={blueprint} onChange={(n) => void changeBlueprint(n)} canEdit={canEdit} /> : null}
       {tab === 'progress' ? <TrackerSection playerId={playerId} category="progress" canEdit={canEdit} /> : null}
       {tab === 'biometrics' ? <TrackerSection playerId={playerId} category="biometrics" canEdit={canEdit} /> : null}
       {tab === 'fitness' ? <TrackerSection playerId={playerId} category="fitness" canEdit={canEdit} /> : null}
