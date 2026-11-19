@@ -20,7 +20,7 @@
 
 import { webmFixDuration } from 'webm-fix-duration';
 import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
-import { scaledExportSize } from '@/lib/exportEstimate';
+import { scaledExportSize, hubFinalExport } from '@/lib/exportEstimate';
 import {
   emptyExportError, holdResumeSeek, holdSeekLanded, NO_FRAME_GIVE_UP_MS, outputProgress, resumeAction, RESUME_FAILED_TEXT, runOverlay, type OverlayFn,
 } from '@/lib/exportOverlay';
@@ -781,5 +781,7 @@ export async function exportCroppedVideo(
   region: ExportRegion,
   onProgress?: (msg: string) => void,
 ): Promise<EditExportResult> {
-  return exportEditedVideo(srcBlob, { region, onProgress });
+  // The final video leaves at 1080p (short side) at most, with the 1080p bitrate (hubFinalExport).
+  const { maxHeight, videoBitsPerSecond } = hubFinalExport(region.w, region.h);
+  return exportEditedVideo(srcBlob, { region, onProgress, maxHeight, videoBitsPerSecond });
 }
