@@ -1,9 +1,16 @@
 import Link from 'next/link';
+import { pageMetadata } from '@/lib/seo/site';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCuratedProfile } from '@/lib/coach/curated';
 import { parseDirectoryBlurb } from '@/lib/coach/directoryBlurb';
 
 export const dynamic = 'force-dynamic';
+
+export const metadata = pageMetadata({
+  title: 'Find a tennis coach – AngleMotion',
+  description: 'Browse AngleMotion coach profiles: tennis coaches who analyze technique on video.',
+  path: '/coaches',
+});
 
 interface CoachRow {
   id: string;

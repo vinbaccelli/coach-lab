@@ -4,6 +4,8 @@ import ControlPanelHome from '@/components/ControlPanelHome';
 import LandingPage from '@/components/LandingPage';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getLivePrices } from '@/lib/billing/livePrices';
+import JsonLd from '@/components/blog/JsonLd';
+import { absoluteUrl, SITE_NAME } from '@/lib/seo/site';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +25,26 @@ export default async function HomePage() {
   }
 
   // Prices only for the logged-out landing (cached; lib/billing/livePrices.ts).
-  if (!signedIn) return <LandingPage prices={await getLivePrices()} />;
+  if (!signedIn) {
+    return (
+      <>
+        <JsonLd
+          data={[
+            {
+              '@context': 'https://schema.org',
+              '@type': 'Organization',
+              name: SITE_NAME,
+              url: absoluteUrl('/'),
+              logo: absoluteUrl('/logo-square-new.jpg'),
+              founder: { '@type': 'Person', name: 'Vin Baccelli', url: absoluteUrl('/coach/vinbaccelli') },
+            },
+            { '@context': 'https://schema.org', '@type': 'WebSite', name: SITE_NAME, url: absoluteUrl('/') },
+          ]}
+        />
+        <LandingPage prices={await getLivePrices()} />
+      </>
+    );
+  }
 
   return (
     <WorkspaceChrome>

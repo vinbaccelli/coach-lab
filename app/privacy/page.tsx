@@ -1,9 +1,11 @@
 import Link from 'next/link';
+import { pageMetadata } from '@/lib/seo/site';
 
-export const metadata = {
+export const metadata = pageMetadata({
   title: 'Privacy Policy — AngleMotion',
   description: 'How AngleMotion collects, uses, and protects your data.',
-};
+  path: '/privacy',
+});
 
 /**
  * Public privacy policy — required for Google OAuth verification of the
