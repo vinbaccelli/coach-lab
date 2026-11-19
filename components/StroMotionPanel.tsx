@@ -13,14 +13,9 @@ import type { StroMotionBackground, StroMotionVideoOrder } from '@/lib/stroMotio
 // `import type` only — erased at compile time, so the panel gains no runtime
 // dependency on the hook; the summary shape keeps a single definition.
 import type { StroAutoRunSummary } from '@/hooks/useStroMotion';
+import { formatFrameTime, generateDisabledReason } from '@/lib/stroMotionHints';
 
-function formatTimeShort(seconds: number): string {
-  if (!Number.isFinite(seconds)) return '0:00';
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 10);
-  return `${mins}:${secs.toString().padStart(2, '0')}.${ms}`;
-}
+const formatTimeShort = formatFrameTime;
 
 const OBJECT_TYPES: { id: StroMotionObjectType; label: string }[] = [
   { id: 'player', label: 'Player' },
@@ -270,6 +265,7 @@ export default function StroMotionPanel({
 }: StroMotionPanelProps) {
   const allReady = frames.length > 0 && readyCount === frames.length;
   const canGenerate = !disabled && !isGenerating && !isProposingFrame && allReady;
+  const generateReason = generateDisabledReason({ disabled: !!disabled, isGenerating: !!isGenerating, isProposingFrame: !!isProposingFrame, frameCount: frames.length, readyCount });
   const frameCountIdx = STRO_MOTION_FRAME_COUNTS.indexOf(frameCount);
   const canDecrement = frameCountIdx > 0;
   const canIncrement = frameCountIdx >= 0 && frameCountIdx < STRO_MOTION_FRAME_COUNTS.length - 1;
@@ -467,7 +463,7 @@ export default function StroMotionPanel({
 
         <div style={{ height: 1, background: 'var(--cl-border)', width: 28, margin: '4px auto' }} />
 
-        <button type="button" disabled={!canGenerate} onClick={onGenerate} title="Generate" style={ib()}>
+        <button type="button" disabled={!canGenerate} onClick={onGenerate} title={generateReason || 'Generate'} style={ib()}>
           <Check size={14} strokeWidth={2} />
         </button>
 
@@ -531,7 +527,7 @@ export default function StroMotionPanel({
 
           <div style={{ height: 1, background: 'var(--cl-border)', width: '100%', margin: '4px 0' }} />
 
-          <button type="button" disabled={!canGenerate} onClick={onGenerate} style={ib()}>
+          <button type="button" disabled={!canGenerate} onClick={onGenerate} title={generateReason || undefined} style={ib()}>
             <LB icon={<Check size={18} />} label="Generate Motion Layer" />
           </button>
 

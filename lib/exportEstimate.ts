@@ -93,3 +93,16 @@ export function formatMegabytes(bytes: number): string {
   if (mb > 0 && mb < 0.1) return '< 0.1 MB';
   return `${mb >= 100 ? Math.round(mb) : mb.toFixed(1)} MB`;
 }
+
+/**
+ * Recording Hub, the final (cropped) video: at most 1080p on the SHORT side (a 1080x1920 reel and a
+ * 1920x1080 landscape clip are both "1080p"), never upscaled. A crop whose short side is above 720
+ * gets the 1080p bitrate; a smaller crop keeps the renderer's own default.
+ */
+export function hubFinalExport(regionW: number, regionH: number): { maxHeight: number | null; videoBitsPerSecond: number | undefined } {
+  if (!(regionW > 0) || !(regionH > 0)) return { maxHeight: null, videoBitsPerSecond: undefined };
+  const short = Math.min(regionW, regionH);
+  const maxHeight = short > 1080 ? (regionH <= regionW ? 1080 : Math.round((regionH * 1080) / regionW)) : null;
+  const outShort = short > 1080 ? 1080 : short;
+  return { maxHeight, videoBitsPerSecond: outShort > 720 ? TIER_VIDEO_BPS['1080p'] : undefined };
+}

@@ -281,8 +281,8 @@ type Box = { x: number; y: number; w: number; h: number };
 export function dataColumnHit(
   p: { x: number; y: number },
   r: Box,
-  o: { headerH: number; touch: boolean; selected: boolean },
-): 'resize' | 'header' | null {
+  o: { headerH: number; touch: boolean; selected: boolean; /** A press anywhere on the column grabs it, like the webcam picture (a tap without a move still presses the row). */ body?: boolean },
+): 'resize' | 'header' | 'body' | null {
   // Mouse: the original box (22 px in, 6 px out). Finger: a 44 px square centred on the corner.
   const inside = o.touch ? TOUCH_TARGET_PX / 2 : 22;
   const outside = o.touch ? TOUCH_TARGET_PX / 2 : 6;
@@ -291,6 +291,7 @@ export function dataColumnHit(
   if (o.selected && p.x >= cx - inside && p.x <= cx + outside && p.y >= cy - inside && p.y <= cy + outside) return 'resize';
   const headerH = Math.min(r.h, o.touch ? Math.max(o.headerH, TOUCH_TARGET_PX) : o.headerH);
   if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + headerH) return 'header';
+  if (o.body && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) return 'body';
   return null;
 }
 

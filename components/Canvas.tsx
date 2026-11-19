@@ -1595,9 +1595,18 @@ function clampPanToLetterbox(
   dy: number,
   dw: number,
   dh: number,
+  /** The hand toggle is on: the video may be dragged even when it is not zoomed in. */
+  free = false,
 ): { x: number; y: number } {
   if (zoom <= ZOOM_MIN + 0.001 || dw <= 1 || dh <= 1) {
-    return { x: 0, y: 0 };
+    if (!free || dw <= 1 || dh <= 1) return { x: 0, y: 0 };
+    // Not zoomed: any drag is allowed as long as a good part of the video stays in view.
+    const keepX = Math.min(dw, 120);
+    const keepY = Math.min(dh, 120);
+    return {
+      x: Math.max(keepX - (dx + dw), Math.min(W - keepX - dx, panX)),
+      y: Math.max(keepY - (dy + dh), Math.min(H - keepY - dy, panY)),
+    };
   }
 
   const clampAxis = (
@@ -2578,6 +2587,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const mcResizingRef = useRef<{ startX: number; startY: number; origScale: number } | null>(null);
     /** The column was pressed (its header): drag dots + resize grip show, and the corner resizes. Any other press clears it. */
     const mcSelectedRef = useRef(false);
+    // A press on the column body: a tap (no move) presses the row under it, a drag moves the column.
+    const mcTapRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
     const lastMcRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
     const columnDeleteModeRef = useRef(columnDeleteMode);
     useEffect(() => { columnDeleteModeRef.current = columnDeleteMode; }, [columnDeleteMode]);
@@ -8689,6 +8700,70 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     // ── Pointer down ───────────────────────────────────────────────────────
 
+    // The press on a row of the data column (highlight its line, delete it in delete mode, or edit its value).
+    // Run when a tap on the column ends without a move, so a drag from the same spot moves the column instead.
+    const columnRowPress = (pos: { x: number; y: number }): boolean => {
+      const mcItemsNow = measurementColumnRef.current;
+      const canvas = canvasRef.current;
+      if (mcItemsNow === null || !canvas) return false;
+      const cW = cssW(canvas), cH = cssH(canvas);
+      const s = mcScaleRef.current;
+      const mW = Math.round(MC_BASE_W * s);
+      const rowH = Math.round(22 * s);
+      const mH = mcItemsNow.length > 0 ? mcItemsNow.length * rowH + Math.round(28 * s) : Math.round(48 * s);
+      const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
+      const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
+      if (mcItemsNow.length > 0) {
+        // Rows render with the text BASELINE at mY + 28*s + i*rowH (fillText
+        // draws UPWARD from the baseline, render at 5088). The old floor-from-
+        // top band was off by one — a click on a row's text resolved to the
+        // row ABOVE it. Round to the nearest rendered baseline so a click
+        // anywhere on row i's text/value selects row i.
+        const rowIdx = Math.round((pos.y - (mY + Math.round(28 * s))) / rowH);
+        if (pos.x >= mX && pos.x <= mX + mW && rowIdx >= 0 && rowIdx < mcItemsNow.length) {
+          const item = mcItemsNow[rowIdx];
+          // Delete-mode: a row-click removes that measurement.
+          if (columnDeleteModeRef.current && onMeasurementItemDeleteRef.current) {
+            onMeasurementItemDeleteRef.current(item.id);
+            return true;
+          }
+          // Map the measurement to its overlay line by its STABLE id prefix
+          // (ai-sa/ha/hd/lf/rf/ra), NOT a label substring. Substring matching
+          // mis-routed 'Shoulder-Hip Diff' (contains "shoulder") and
+          // 'Foot Distance' (contains "foot") onto real lines, and rows with no
+          // overlay (elbow/knee interior angles, diff, ruler) matched loosely.
+          // The id prefix is unambiguous and collision-free.
+          const OVERLAY_BY_ID: Record<string, string> = {
+            sa: 'shoulder', ha: 'hip', hd: 'head', lf: 'lfoot', rf: 'rfoot', ra: 'racket',
+          };
+          const oid = item.id.startsWith('ai-')
+            ? (OVERLAY_BY_ID[item.id.split('-')[1]] ?? null)
+            : null;
+          if (oid && showMeasurementOverlaysRef.current) {
+            // Toggle: clicking the already-active line clears the selection.
+            activeOverlayIdRef.current = activeOverlayIdRef.current === oid ? null : oid;
+            renderDirtyRef.current = true;
+            return true;
+          }
+          // No matching line (e.g. a note or diff row): fall back to numeric edit.
+          if (onMeasurementItemEdit && (item.unit || item.value !== 0)) {
+            const newVal = prompt(`Edit ${item.label}:`, String(item.value));
+            if (newVal !== null && newVal.trim() !== '') {
+              const parsed = parseFloat(newVal);
+              if (!isNaN(parsed)) {
+                onMeasurementItemEdit(item.id, parsed);
+                return true;
+              }
+            }
+          }
+        }
+      }
+      return false;
+    };
+    const columnRowPressRef = useRef(columnRowPress);
+    columnRowPressRef.current = columnRowPress;
+
+
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvasEl = e.target as HTMLCanvasElement;
       const toolEarly = activeToolRef.current;
@@ -8809,13 +8884,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
           const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
           const hit = dataColumnHit(posEarly, { x: mX, y: mY, w: mW, h: mH }, {
-            headerH: Math.round(26 * sc), touch: e.pointerType === 'touch', selected: mcSelectedRef.current,
+            headerH: Math.round(26 * sc), touch: e.pointerType === 'touch', selected: mcSelectedRef.current, body: true,
           });
+          mcTapRef.current = null;
           if (hit) {
             canvasEl.setPointerCapture(e.pointerId);
             mcSelectedRef.current = true;
             if (hit === 'resize') mcResizingRef.current = { startX: posEarly.x, startY: posEarly.y, origScale: sc };
-            else mcDraggingRef.current = { startX: posEarly.x, startY: posEarly.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
+            else {
+              mcDraggingRef.current = { startX: posEarly.x, startY: posEarly.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
+              // Anywhere on the body: a tap that does not move still presses the row (see onPointerUp).
+              if (hit === 'body') mcTapRef.current = { x: posEarly.x, y: posEarly.y, moved: false };
+            }
             isDraggingRef.current = true;
             renderDirtyRef.current = true;
             e.preventDefault();
@@ -9186,74 +9266,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // ── Measurement column drag (header) + resize (corner) ───────────
-      const mcItemsNow = measurementColumnRef.current;
-      if (mcItemsNow !== null) {
-        const canvas = canvasRef.current;
-        if (canvas) {
-          const cW = cssW(canvas), cH = cssH(canvas);
-          const s = mcScaleRef.current;
-          const mW = Math.round(MC_BASE_W * s);
-          const rowH = Math.round(22 * s);
-          const mH = mcItemsNow.length > 0 ? mcItemsNow.length * rowH + Math.round(28 * s) : Math.round(48 * s);
-          const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
-          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
-          // NOTE: the header drag and the resize corner are hit-tested EARLIER,
-          // above the pan branch (see "Data column HEADER drag + RESIZE corner"),
-          // because pan mode swallowed them here. Only row hit-testing remains.
-          // Click on a column row → highlight the matching AI line (make it the
-          // active, sole drag target) so the coach picks WHICH line to edit.
-          // Long-press / second click still opens the numeric edit prompt.
-          if (mcItemsNow.length > 0) {
-            // Rows render with the text BASELINE at mY + 28*s + i*rowH (fillText
-            // draws UPWARD from the baseline, render at 5088). The old floor-from-
-            // top band was off by one — a click on a row's text resolved to the
-            // row ABOVE it. Round to the nearest rendered baseline so a click
-            // anywhere on row i's text/value selects row i.
-            const rowIdx = Math.round((pos.y - (mY + Math.round(28 * s))) / rowH);
-            if (pos.x >= mX && pos.x <= mX + mW && rowIdx >= 0 && rowIdx < mcItemsNow.length) {
-              const item = mcItemsNow[rowIdx];
-              // Delete-mode: a row-click removes that measurement.
-              if (columnDeleteModeRef.current && onMeasurementItemDeleteRef.current) {
-                onMeasurementItemDeleteRef.current(item.id);
-                e.preventDefault();
-                return;
-              }
-              // Map the measurement to its overlay line by its STABLE id prefix
-              // (ai-sa/ha/hd/lf/rf/ra), NOT a label substring. Substring matching
-              // mis-routed 'Shoulder-Hip Diff' (contains "shoulder") and
-              // 'Foot Distance' (contains "foot") onto real lines, and rows with no
-              // overlay (elbow/knee interior angles, diff, ruler) matched loosely.
-              // The id prefix is unambiguous and collision-free.
-              const OVERLAY_BY_ID: Record<string, string> = {
-                sa: 'shoulder', ha: 'hip', hd: 'head', lf: 'lfoot', rf: 'rfoot', ra: 'racket',
-              };
-              const oid = item.id.startsWith('ai-')
-                ? (OVERLAY_BY_ID[item.id.split('-')[1]] ?? null)
-                : null;
-              if (oid && showMeasurementOverlaysRef.current) {
-                // Toggle: clicking the already-active line clears the selection.
-                activeOverlayIdRef.current = activeOverlayIdRef.current === oid ? null : oid;
-                renderDirtyRef.current = true;
-                e.preventDefault();
-                return;
-              }
-              // No matching line (e.g. a note or diff row): fall back to numeric edit.
-              if (onMeasurementItemEdit && (item.unit || item.value !== 0)) {
-                const newVal = prompt(`Edit ${item.label}:`, String(item.value));
-                if (newVal !== null && newVal.trim() !== '') {
-                  const parsed = parseFloat(newVal);
-                  if (!isNaN(parsed)) {
-                    onMeasurementItemEdit(item.id, parsed);
-                    e.preventDefault();
-                    return;
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+      // The column's header, body and resize corner are hit-tested EARLIER (see "Data column header drag / corner resize");
+      // a tap on a row runs in onPointerUp (columnRowPress), so pressing a row no longer swallows a drag.
 
       // ── Skeleton TOOL: one-shot click to set + lock focus ──────────────
       // Active-session clicks (the "NO — click player" flow) are consumed
@@ -9604,6 +9618,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (canvas) {
           const dx = pos.x - mcDraggingRef.current.startX;
           const dy = pos.y - mcDraggingRef.current.startY;
+          if (mcTapRef.current && Math.hypot(dx, dy) > 6) mcTapRef.current.moved = true;
           // Kept inside the canvas, black bars included (lib/drawingTools.ts clampColumnPos); the generated video keeps it inside the frame.
           const cW = cssW(canvas), cH = cssH(canvas);
           const n = measurementColumnRef.current?.length ?? 0;
@@ -9716,6 +9731,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             dy,
             dw,
             dh,
+            handPanActiveRef.current,
           );
           panXRef.current = c.x;
           panYRef.current = c.y;
@@ -9892,7 +9908,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (mcDraggingRef.current) {
         mcDraggingRef.current = null;
         isDraggingRef.current = false;
-        onMeasurementColumnDrag?.(mcPosRef.current);
+        const tap = mcTapRef.current;
+        mcTapRef.current = null;
+        if (tap && !tap.moved) { columnRowPressRef.current({ x: tap.x, y: tap.y }); }
+        else onMeasurementColumnDrag?.(mcPosRef.current);
         try { (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
         return;
       }
