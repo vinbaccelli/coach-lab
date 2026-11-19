@@ -1,5 +1,6 @@
 'use client';
 
+
 /** The sections of a player profile. One scrollable row of tabs; the choice is kept in the URL (?tab=). */
 export const PROFILE_TABS = [
   // First on purpose (architect, 2026-11-17): it is what the coach and the client use most, with the add controls
@@ -21,10 +22,26 @@ export const visibleTabs = (only?: readonly ProfileTab[]) => (only ? PROFILE_TAB
 
 export const isProfileTab = (v: string | null | undefined): v is ProfileTab => PROFILE_TABS.some((t) => t.id === v);
 
+/**
+ * On a phone the row scrolls sideways: bring the open tab into view, so you can always see where you are
+ * (opening Progress, Biometrics, Fitness, Nutrition or Blueprint used to leave the open tab off the right edge).
+ * A callback ref, not an effect, so this file imports nothing from React and its pure exports (PROFILE_TABS …)
+ * stay importable by the tests. It only moves the row when the open tab is not already fully visible.
+ */
+function scrollOpenTabIntoView(list: HTMLDivElement | null) {
+  const tab = list?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  if (!list || !tab) return;
+  const t = tab.getBoundingClientRect();
+  const l = list.getBoundingClientRect();
+  if (t.left >= l.left && t.right <= l.right) return;
+  const left = list.scrollLeft + (t.left - l.left) - (l.width - t.width) / 2;
+  list.scrollTo({ left: Math.max(0, left), behavior: 'smooth' });
+}
+
 export default function ProfileTabs({ value, onChange, badges = {}, only }: { value: ProfileTab; onChange: (t: ProfileTab) => void; badges?: Partial<Record<ProfileTab, number>>; only?: readonly ProfileTab[] }) {
   return (
     <nav aria-label="Player sections" style={{ position: 'sticky', top: 0, zIndex: 15, margin: '0 0 16px', padding: '8px 0', background: 'var(--cl-bg-primary, #f2f2f7)' }}>
-      <div role="tablist" style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch', padding: 3, borderRadius: 12, background: 'rgba(118,118,128,0.12)' }}>
+      <div ref={scrollOpenTabIntoView} role="tablist" style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch', padding: 3, borderRadius: 12, background: 'rgba(118,118,128,0.12)' }}>
         {visibleTabs(only).map((t) => {
           const active = t.id === value;
           const n = badges[t.id] ?? 0;
