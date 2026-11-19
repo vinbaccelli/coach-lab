@@ -7,6 +7,8 @@ export const PROFILE_TABS = [
   { id: 'timeline', label: 'Timeline' },
   { id: 'overview', label: 'Overview' },
   { id: 'technical', label: 'Technical' },
+  // The definition of each stroke (the eBook) and this player's chosen variants; the Technical tab checks against it.
+  { id: 'blueprint', label: 'Blueprint' },
   { id: 'progress', label: 'Progress' },
   { id: 'biometrics', label: 'Biometrics' },
   { id: 'fitness', label: 'Fitness' },

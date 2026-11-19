@@ -4,6 +4,7 @@ import { google } from 'googleapis';
 import { requireFeature } from '@/lib/entitlements.server';
 import { trashDriveFile } from '@/lib/google/drive';
 import { deletePlayer, supabaseDeleteStore } from '@/lib/players/deletePlayer';
+import { sanitizeBlueprint } from '@/lib/players/blueprint';
 
 // googleapis (Drive trash on DELETE) needs the Node runtime; a delete touches Drive and Storage.
 export const runtime = 'nodejs';
@@ -48,7 +49,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     notes: string | null;
     profile_fields: unknown;
     timeline_order: unknown;
+    blueprint: unknown;
   }>;
+  // The Blueprint (chosen variants + fundamentals marks) is cleaned here: the browser is not trusted.
+  if ('blueprint' in body) body.blueprint = sanitizeBlueprint(body.blueprint);
 
   const { data, error } = await session.supabase
     .from('players')
