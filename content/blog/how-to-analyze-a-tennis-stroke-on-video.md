@@ -2,7 +2,7 @@
 title: How to analyze a tennis stroke on video, step by step
 description: Load a clip, switch on the skeleton, measure joint angles and mark up the frame: a step-by-step guide to tennis video analysis with AngleMotion.
 date: 2026-11-19
-category: using-anglemotion
+category: tutorials
 author: Vin Baccelli
 draft: false
 ---

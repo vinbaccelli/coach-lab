@@ -1,28 +1,25 @@
-/** Blog categories (Vin's topic list). A post's `category` must be one of these keys. */
+/** Academy divisions (Vin's list). A post's `category` must be one of these keys.
+ *  A division with no published posts is hidden from the index, the sitemap and its own page. */
 export const CATEGORIES = {
-  'using-anglemotion': {
-    label: 'Using AngleMotion',
-    description: 'Step-by-step guides to the AngleMotion tools.',
+  tutorials: {
+    label: 'Tutorials',
+    description: 'Step-by-step guides to video analysis with the AngleMotion tools.',
   },
-  'video-analysis': {
-    label: 'Video analysis',
-    description: 'How to film, review and measure video of a stroke.',
+  articles: {
+    label: 'Articles',
+    description: 'Short articles on analysing tennis strokes on video, also published as Instagram carousels.',
   },
-  technique: {
-    label: 'Technique',
-    description: 'Forehand, backhand, serve and volley technique.',
-  },
-  coaching: {
-    label: 'Coaching',
-    description: 'Coaching workflows and working with video.',
+  ebooks: {
+    label: 'eBooks',
+    description: 'eBooks by Vin Baccelli, analysed with the AngleMotion skeleton, motion layer and snapshots.',
   },
   'pro-analysis': {
     label: 'Pro player analysis',
     description: 'Looking at how professional players move and hit.',
   },
-  performance: {
-    label: 'Movement and performance',
-    description: 'Sports performance and movement analysis.',
+  coaching: {
+    label: 'Coaching',
+    description: 'Coaching workflows and working with video.',
   },
 } as const;
 

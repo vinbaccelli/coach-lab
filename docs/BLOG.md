@@ -20,7 +20,7 @@ title: At most 70 characters
 description: At most 160 characters; this is the search snippet
 date: 2026-11-19
 updated: 2026-12-01        (optional)
-category: using-anglemotion
+category: tutorials
 author: Vin Baccelli       (optional; must exist in lib/blog/authors.ts)
 image: /blog/my-image.jpg  (optional; site path or https URL; default is the logo image)
 draft: false               (true hides it everywhere, including the sitemap)
@@ -28,7 +28,7 @@ draft: false               (true hides it everywhere, including the sitemap)
 Body in Markdown…
 ```
 
-Categories (`lib/blog/categories.ts`): `using-anglemotion`, `video-analysis`, `technique`, `coaching`, `pro-analysis`, `performance`.
+Categories (`lib/blog/categories.ts`): `tutorials`, `articles`, `ebooks`, `pro-analysis`, `coaching`.
 
 Markdown supported: `##`/`###`/`####` headings (the page already has the H1; `#` becomes H2), paragraphs, bullet and numbered lists, `>` quotes, `---`, fenced code, and inline **bold**, *italic*, `code`, links and images. Not supported: tables, raw HTML, triple-star emphasis.
 

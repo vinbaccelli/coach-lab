@@ -6,7 +6,7 @@ import { CATEGORIES, type CategoryKey } from '@/lib/blog/categories';
 import { getPublishedPosts, getUsedCategories } from '@/lib/blog/posts.server';
 import { absoluteUrl, DEFAULT_OG_IMAGE, DEFAULT_OG_IMAGE_SIZE, SITE_NAME } from '@/lib/seo/site';
 
-const TITLE = 'AngleMotion Academy Blog: tennis video analysis';
+const TITLE = 'AngleMotion Academy: tennis video analysis';
 const DESCRIPTION =
   'Guides to analyzing tennis strokes on video: how to film, how to measure angles, and how to use the AngleMotion tools.';
 
@@ -31,9 +31,9 @@ export default function BlogIndex() {
   return (
     <>
       <JsonLd
-        data={{ '@context': 'https://schema.org', '@type': 'Blog', name: 'AngleMotion Academy Blog', url: absoluteUrl('/blog'), description: DESCRIPTION }}
+        data={{ '@context': 'https://schema.org', '@type': 'Blog', name: 'AngleMotion Academy', url: absoluteUrl('/blog'), description: DESCRIPTION }}
       />
-      <h1>AngleMotion Academy Blog</h1>
+      <h1>AngleMotion Academy</h1>
       <p className="blog-lede">{DESCRIPTION}</p>
       {categories.length > 0 && (
         <nav className="blog-chips" aria-label="Categories">

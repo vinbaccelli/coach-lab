@@ -22,7 +22,7 @@ const isPublic = (p: string) => p === '/' || middlewarePublicPrefixes().some((pr
 test('the middleware lets /blog and its pages through (public) while /analysis stays gated', () => {
   assert.ok(isPublic('/blog'));
   assert.ok(isPublic('/blog/how-to-analyze-a-tennis-stroke-on-video'));
-  assert.ok(isPublic('/blog/category/using-anglemotion'));
+  assert.ok(isPublic('/blog/category/tutorials'));
   assert.ok(!isPublic('/analysis'));
   assert.ok(!isPublic('/academy'));
   assert.ok(!isPublic('/admin'));
@@ -31,7 +31,7 @@ test('the middleware lets /blog and its pages through (public) while /analysis s
 test('every sitemap URL is on the canonical host and public in the middleware', () => {
   const map = buildSitemap({
     posts: [{ slug: 'a-post', date: '2026-11-19' }],
-    categories: ['using-anglemotion'],
+    categories: ['tutorials'],
     coachSlugs: ['vinbaccelli'],
   });
   assert.ok(map.length >= STATIC_PUBLIC_PATHS.length + 3);

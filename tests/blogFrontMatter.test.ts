@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { splitFrontMatter, parseMeta } from '@/lib/blog/frontMatter';
 
-const GOOD = { title: 'A title', description: 'A description.', date: '2026-11-19', category: 'using-anglemotion' };
+const GOOD = { title: 'A title', description: 'A description.', date: '2026-11-19', category: 'tutorials' };
 
 test('splitFrontMatter: flat key/value block, quotes stripped, body trimmed', () => {
   const p = splitFrontMatter('---\ntitle: "Hello: world"\ndraft: false\n# comment\n---\n\nBody here.\n')!;

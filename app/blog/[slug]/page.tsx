@@ -75,13 +75,13 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
           '@type': 'BreadcrumbList',
           itemListElement: [
             { '@type': 'ListItem', position: 1, name: 'Home', item: absoluteUrl('/') },
-            { '@type': 'ListItem', position: 2, name: 'Blog', item: absoluteUrl('/blog') },
+            { '@type': 'ListItem', position: 2, name: 'Academy', item: absoluteUrl('/blog') },
             { '@type': 'ListItem', position: 3, name: post.title, item: url },
           ],
         }}
       />
       <p className="blog-meta">
-        <Link href="/blog">Blog</Link> / <Link href={`/blog/category/${post.category}`}>{CATEGORIES[post.category].label}</Link>
+        <Link href="/blog">Academy</Link> / <Link href={`/blog/category/${post.category}`}>{CATEGORIES[post.category].label}</Link>
       </p>
       <h1>{post.title}</h1>
       <p className="blog-byline">

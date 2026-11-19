@@ -12,7 +12,7 @@ export function BlogHeader() {
           <span>Angle<span className="blog-accent">Motion</span></span>
         </Link>
         <div className="blog-nav-links">
-          <Link href="/blog">Blog</Link>
+          <Link href="/blog">Academy</Link>
           <Link href="/pricing">Pricing</Link>
           <Link href="/coaches">Coaches</Link>
           <Link href="/login">Sign in</Link>
@@ -28,7 +28,7 @@ export function BlogFooter() {
     <footer className="blog-footer">
       <nav className="blog-footer-links" aria-label="Footer">
         <Link href="/">Home</Link>
-        <Link href="/blog">Blog</Link>
+        <Link href="/blog">Academy</Link>
         <Link href="/pricing">Pricing</Link>
         <Link href="/coaches">Coaches</Link>
         <Link href="/privacy">Privacy</Link>

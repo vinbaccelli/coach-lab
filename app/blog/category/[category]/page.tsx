@@ -16,7 +16,7 @@ export async function generateMetadata({ params }: { params: Promise<{ category:
   const { category } = await params;
   if (!isCategory(category)) return {};
   const { label, description } = CATEGORIES[category];
-  const title = `${label}: AngleMotion Academy Blog`;
+  const title = `${label}: AngleMotion Academy`;
   const url = absoluteUrl(`/blog/category/${category}`);
   return {
     title,
@@ -34,7 +34,7 @@ export default async function CategoryPage({ params }: { params: Promise<{ categ
   if (posts.length === 0) notFound();
   return (
     <>
-      <p className="blog-meta"><Link href="/blog">Blog</Link> / {CATEGORIES[category].label}</p>
+      <p className="blog-meta"><Link href="/blog">Academy</Link> / {CATEGORIES[category].label}</p>
       <h1>{CATEGORIES[category].label}</h1>
       <p className="blog-lede">{CATEGORIES[category].description}</p>
       {posts.map((p) => <PostCard key={p.slug} post={p} minutes={p.readingMinutes} />)}

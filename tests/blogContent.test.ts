@@ -12,7 +12,7 @@ function tmp(files: Record<string, string>) {
   for (const [n, c] of Object.entries(files)) writeFileSync(path.join(dir, n), c);
   return dir;
 }
-const post = (extra = '') => `---\ntitle: T\ndescription: D\ndate: 2026-11-19\ncategory: technique\n${extra}---\nBody words here.\n`;
+const post = (extra = '') => `---\ntitle: T\ndescription: D\ndate: 2026-11-19\ncategory: articles\n${extra}---\nBody words here.\n`;
 
 test('loader: sorts newest first, hides drafts, computes reading time', () => {
   const dir = tmp({
