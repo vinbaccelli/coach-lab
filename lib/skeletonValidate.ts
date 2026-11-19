@@ -117,6 +117,7 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
     { j: SIDES('elbow'), p: SIDES('shoulder') },
     { j: SIDES('wrist'), p: SIDES('elbow'), ruler: SIDES('shoulder') },
   ];
+  const fixLimbAssignment = () => {
   for (const { j: [jl, jr], p: [pl, pr], ruler } of CHAINS) {
     const keepT: Array<number | null> = new Array(out.length).fill(null);
     const swapT: Array<number | null> = new Array(out.length).fill(null);
@@ -157,6 +158,9 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
     }
   }
 
+  };
+  fixLimbAssignment();
+
   // ── 1. L/R swaps, greedy against the previous output frame ──────────────
   for (let i = 1; i < out.length; i++) {
     const prev = idx[i - 1], cur = idx[i];
@@ -175,6 +179,11 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
       }
     }
   }
+
+  // Step 1 swaps a left/right pair of ONE joint at a time against the previous frame. When a pose
+  // jumps (a kick-back after the serve), it can undo step 0 for the knees but not the ankles: each
+  // knee is then joined to the opposite ankle again, shins in an X. Same anatomy test, once more.
+  fixLimbAssignment();
 
   // Neighbour-midpoint prediction for a joint at sample i (needs valid samples either side, close in time).
   const valid = (i: number, n: string) => { const k = idx[i]?.get(n); return k && k.score >= MIN_SCORE ? k : null; };
