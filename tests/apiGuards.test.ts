@@ -23,7 +23,8 @@ const GUARDS: Array<[file: string, method: string, feature: keyof typeof FEATURE
   ['app/api/players/[id]/google-doc/route.ts', 'POST', 'docsExport'],
   ['app/api/google/create-document/route.ts', 'POST', 'docsExport'],
   ['app/api/google/report/route.ts', 'POST', 'docsExport'],
-  ['app/api/google/upload-image/route.ts', 'POST', 'docsExport'],
+  // Drive-only screenshots on every plan: the upload that saving a screenshot to a player uses is gated by saveToPlayer (Light and up), not docsExport.
+  ['app/api/google/upload-image/route.ts', 'POST', 'saveToPlayer'],
   ['app/api/youtube/upload-session/route.ts', 'POST', 'youtube'],
   ['app/api/coach-profile/route.ts', 'PUT', 'coachProfile'],
   ['app/api/academy/route.ts', 'GET', 'academy'],
