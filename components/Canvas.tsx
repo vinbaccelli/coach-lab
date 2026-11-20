@@ -229,7 +229,7 @@ interface StrokeTriangle {
 }
 interface StrokeSwing   {
   tool: 'swingPath' | 'manualSwing';
-  pts: Pt[]; color: string; lw: number; dashed?: boolean; arrowAtEnd?: boolean; spinning?: boolean;
+  pts: Pt[]; color: string; lw: number; opacity?: number; dashed?: boolean; arrowAtEnd?: boolean; spinning?: boolean;
   /** Video time (s) of each click, parallel to `pts`: the path is drawn only between the first and the last (lib/drawingTools.ts swingPathVisibleAt). Absent on paths drawn before times were stored, and on sources with no video clock: always drawn, as before. */
   times?: number[];
 }
@@ -1539,12 +1539,12 @@ function isContextualStrokeTool(tool: string): boolean {
  * Which committed strokes Style mode can actually restyle.
  *
  * Mirrors the early-outs inside applyContextualChange / buildContextualSnapshot:
- * text carries fontSize rather than lw (it has its own edit affordance), and the
- * swing paths are generated geometry. Selecting those would light up a selection
- * box whose controls then silently do nothing, so they are not selectable.
+ * text carries fontSize rather than lw (it has its own edit affordance). The swing
+ * paths carry colour, thickness, dash, opacity and pulse like any other mark and are
+ * restyled the same way (they used to be excluded, so they could not be picked).
  */
 function isStyleableStrokeTool(tool: string): boolean {
-  return tool !== 'text' && tool !== 'swingPath' && tool !== 'manualSwing';
+  return tool !== 'text';
 }
 
 type ContextualTarget =
@@ -1992,7 +1992,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, joi
 
   } else if (s.tool === 'swingPath' || s.tool === 'manualSwing') {
     const sw = s as StrokeSwing;
-    drawSmoothPath(ctx, sw.pts, sw.color, sw.lw, 1, sw.dashed ?? false, sw.arrowAtEnd === true, sw.spinning === true);
+    drawSmoothPath(ctx, sw.pts, sw.color, sw.lw, strokeOpacity(sw), sw.dashed ?? false, sw.arrowAtEnd === true, sw.spinning === true);
     ctx.restore();
     return;
 
@@ -3311,7 +3311,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!sel || (sel.kind !== 'stroke' && sel.kind !== 'angle')) return;
       if (sel.kind === 'stroke') {
         const raw = strokesRef.current[sel.idx];
-        if (!raw || raw.tool === 'text' || raw.tool === 'swingPath' || raw.tool === 'manualSwing') return;
+        if (!raw || raw.tool === 'text') return;
         const next = { ...(raw as StrokeLine), spinning: circleSpinning || undefined } as Stroke;
         strokesRef.current = [
           ...strokesRef.current.slice(0, sel.idx),
@@ -7749,7 +7749,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const opts = drawingOptsRef.current;
       if (target.kind === 'stroke') {
         const s = strokesRef.current[target.idx];
-        if (!s || s.tool === 'text' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
+        if (!s || s.tool === 'text') {
           return DEFAULT_CONTEXTUAL_SNAPSHOT;
         }
         const styled = s as StrokeLine;
@@ -7848,7 +7848,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (target.kind === 'stroke') {
         const strokes = [...strokesRef.current];
         const raw = strokes[target.idx];
-        if (!raw || raw.tool === 'text' || raw.tool === 'swingPath' || raw.tool === 'manualSwing') return;
+        if (!raw || raw.tool === 'text') return;
         const s = { ...raw } as StrokeLine;
         if (patch.color !== undefined) s.color = patch.color;
         if (patch.lineWidth !== undefined) s.lw = patch.lineWidth;
