@@ -71,6 +71,20 @@ ok(pen.length === 1 && pen[0].tool === 'pen' && pen[0].pts.length >= 6, `precisi
 const line = await precisionStroke('Line');
 ok(line.length === 1 && Math.hypot(line[0].p2.x - line[0].p1.x, line[0].p2.y - line[0].p1.y) > 20, `precision + line draws ONE line from the first tap to the second (${line.length} stroke)`);
 
+// 3. The swing path can be picked in Style mode and restyled (it used to be excluded).
+await p.locator('button[aria-label="Swing path"]').tap(); await p.waitForTimeout(500);
+const n0 = (await strokes()).length;
+for (const [x, y] of [[120, 420], [170, 380], [230, 370], [290, 400]]) { await p.touchscreen.tap(x, y); await p.waitForTimeout(800); }
+await p.touchscreen.tap(290, 400); await p.waitForTimeout(100); await p.touchscreen.tap(290, 400); await p.waitForTimeout(700);
+const swingIdx = (await strokes()).findIndex((s, i) => i >= n0 && (s.tool === 'manualSwing' || s.tool === 'swingPath') && s.pts.length >= 3);
+ok(swingIdx >= 0, 'a swing path with several points was drawn');
+await p.locator('button[aria-label="Style"]').tap(); await p.waitForTimeout(600);
+await p.touchscreen.tap(170, 380); await p.waitForTimeout(800);
+await p.locator('button[aria-label="Color #FF3B30"]').tap(); await p.waitForTimeout(400);
+await p.locator('button[aria-label="Dashed line"]').tap(); await p.waitForTimeout(400);
+const sw = (await strokes())[swingIdx];
+ok(sw && sw.color === '#FF3B30' && sw.dashed === true, `the swing path took the new colour and dash (${sw?.color}, dashed ${sw?.dashed})`);
+
 await b.close();
 console.log(failures ? `${failures} FAILED` : 'all passed');
 process.exit(failures ? 1 : 0);
