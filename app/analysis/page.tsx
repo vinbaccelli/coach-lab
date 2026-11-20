@@ -221,7 +221,7 @@ import { createSupabaseBrowserClient } from '@/lib/supabase/browser';
 import { useEntitlement } from '@/lib/useEntitlement';
 import type { Feature } from '@/lib/entitlements';
 import { autoRacketEnabled, setAutoRacketPreference } from '@/lib/stroMotionDraft/autoRacketFlags';
-import { AUTODETECT_KILLED_NOTICE, consumeAutoDetectKilled, isPhoneBudgetActive, markAutoDetectFinished, markAutoDetectStarted } from '@/lib/stroMotionDraft/phoneBudget';
+import { consumeAutoDetectKilled, isPhoneBudgetActive, killedNotice, markAutoDetectFinished, markAutoDetectStarted } from '@/lib/stroMotionDraft/phoneBudget';
 import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/restartBreadcrumb';
 import { racketWorkerEnabled } from '@/lib/stroMotionDraft/racketWorkerClient';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
@@ -4690,7 +4690,11 @@ function Home() {
       const cur = parseTier(window.localStorage.getItem(SHRINK_TIER_KEY)) ?? DEFAULT_PHONE_TIER;
       window.localStorage.setItem(SHRINK_TIER_KEY, String(lowerTier(cur)));
     } catch { /* storage blocked */ }
-    const id = window.setTimeout(() => setProcessingStatus(AUTODETECT_KILLED_NOTICE), 1500);
+    // Racket detection (about +1 GB) is the usual reason the phone ends the page: switch it off so the next run is not doomed too.
+    let racketWasOn = false;
+    try { racketWasOn = window.localStorage.getItem('autoRacket') === '1'; } catch { /* storage blocked */ }
+    if (racketWasOn) { setAutoRacketPreference(false); setStroRacketDetect(false); }
+    const id = window.setTimeout(() => setProcessingStatus(killedNotice(racketWasOn)), 1500);
     return () => window.clearTimeout(id);
   }, []);
 
