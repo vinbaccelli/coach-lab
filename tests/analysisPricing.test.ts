@@ -60,3 +60,23 @@ test('sanitize drops bad offers, caps them, and never enables an empty storefron
 test('formatMoney falls back to EUR for a bad currency code', () => {
   assert.match(formatMoney(4500, 'zz!'), /45/);
 });
+
+import { subscriptionProblems, EMPTY_SUBSCRIPTION_OFFER, sanitizeSubscriptionOffer as sanitizeOffer } from '../lib/analysisPricing';
+
+test('switched on with no analysis type: says what is missing (the server would drop it)', () => {
+  const p = subscriptionProblems({ ...EMPTY_SUBSCRIPTION_OFFER, enabled: true });
+  assert.ok(p.some((m) => /at least one analysis type/i.test(m)));
+  assert.equal(sanitizeOffer({ enabled: true, offers: [] }).enabled, false);
+});
+test('a type without a price is reported and not shown; a complete one clears the main problem', () => {
+  const half = { ...EMPTY_SUBSCRIPTION_OFFER, enabled: true, offers: [{ id: 'a', title: 'Quick', description: '', unitCents: 0, currency: 'EUR' }] };
+  assert.ok(subscriptionProblems(half).some((m) => /at least one analysis type/i.test(m)));
+  const ok = { ...half, offers: [{ ...half.offers[0], unitCents: 2500 }] };
+  assert.ok(!subscriptionProblems(ok).some((m) => /at least one analysis type/i.test(m)));
+  assert.equal(sanitizeOffer(ok).enabled, true);
+});
+test('missing payment links are listed; switched off says nothing', () => {
+  const on = { ...EMPTY_SUBSCRIPTION_OFFER, enabled: true, offers: [{ id: 'a', title: 'Quick', description: '', unitCents: 2500, currency: 'EUR' }] };
+  assert.ok(subscriptionProblems(on).some((m) => /payment link/i.test(m)));
+  assert.deepEqual(subscriptionProblems({ ...on, enabled: false }), []);
+});

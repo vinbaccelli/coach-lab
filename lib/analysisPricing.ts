@@ -154,3 +154,20 @@ export function sanitizeSubscriptionOffer(raw: unknown): SubscriptionOffer {
     payLinks,
   };
 }
+
+/**
+ * What is missing before the public page shows the subscription. The server drops an analysis type
+ * without a title or a price and switches the whole offer off when none is left, so the editor says
+ * so (it used to save quietly and show nothing). Empty list = the offer will show.
+ */
+export function subscriptionProblems(offer: SubscriptionOffer): string[] {
+  if (!offer.enabled) return [];
+  const problems: string[] = [];
+  const incomplete = offer.offers.filter((o) => !text(o.title) || !(Number(o.unitCents) > 0));
+  const complete = offer.offers.length - incomplete.length;
+  if (complete === 0) problems.push('Add at least one analysis type with a title and a price, or nothing will show on your public page.');
+  else if (incomplete.length) problems.push(`${incomplete.length} analysis type${incomplete.length > 1 ? 's' : ''} without a title or a price will not be shown.`);
+  const missingLinks = TERMS.filter((t) => !safeHttpUrl(offer.payLinks[t.id]));
+  if (missingLinks.length) problems.push(`No payment link yet for: ${missingLinks.map((t) => t.label).join(', ')}. Clients will see that option but cannot pay through it.`);
+  return problems;
+}
