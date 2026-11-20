@@ -59,7 +59,7 @@ import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, vide
 import { recoveryPlan, reloadSameSource, shouldRestartFromStart, watchStuckPlayback } from '@/lib/seekWait';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
 import { displayedSection, metricsSectionShown, motionSectionShown, selectedSection, type TrackScope } from '@/lib/aiTrackScope';
-import { overlayBottomInset } from '@/lib/timelineView';
+import { overlayBottomInset, railOverlayWidth } from '@/lib/timelineView';
 import { FADE_MS, statusKind, statusLifetimeMs } from '@/lib/statusToast';
 import { analyzeForExport } from '@/lib/exportOverlay';
 const SaveSessionModal = React.lazy(() => import('@/components/sessions/SaveSessionModal'));
@@ -7761,7 +7761,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   // Ends above the timeline / play controls under it (measured; 0 when nothing is under the rail).
                   bottom: toolbarOverlayBottom,
                   left: 0,
-                  width: toolbarWidthPx,
+                  // Expanded labels open at their own width: toolbarWidthPx is the 60 px rail on a phone, which is
+                  // what made the expanded toolbar a 60 px strip with its labels cut off (since #119).
+                  width: railOverlayWidth(toolbarLabelsExpanded, toolbarWidthPx, TOOLBAR_COMPACT_EXPANDED_W),
                   boxSizing: 'border-box' as const,
                   background: '#FFFFFF',
                   borderRight: '1px solid #D1D1D6',
