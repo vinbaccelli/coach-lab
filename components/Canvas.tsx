@@ -7907,6 +7907,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const precisionToolUsesToggleDownUp = (t: ToolType): boolean =>
       t === 'erase' ||
+      t === 'pen' ||
       t === 'line' ||
       t === 'arrow' ||
       t === 'arrowAngle' ||
@@ -9665,6 +9666,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      // ── Precision: the second finger (commit tap) never moves anything ─────
+      if (
+        precisionAnchorPointerIdRef.current !== null &&
+        e.pointerId !== precisionAnchorPointerIdRef.current &&
+        e.pointerType === 'touch'
+      ) {
+        e.preventDefault();
+        return;
+      }
+
       // ── Precision anchor move: reposition crosshair (offset owned here) ────
       if (
         precisionAnchorPointerIdRef.current === e.pointerId &&
@@ -9677,7 +9688,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         renderDirtyRef.current = true;
         e.preventDefault();
         // Between a two-step shape's begin and commit taps, the endpoint tracks
-        // the crosshair. Pen dabs commit immediately, so there's nothing to drag.
+        // the crosshair; the pen draws freehand the same way (updateActiveStrokeAt appends a point).
         if (isDraggingRef.current && activeStrokeRef.current) {
           updateActiveStrokeAt(ch);
         }
@@ -9953,6 +9964,24 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      // ── Precision: the second finger lifting is only the end of a commit tap ──
+      // While the anchor finger is down, the second finger's press already acted (precisionCommitAt). Its
+      // lift must not fall through to the ordinary pointer-up, which finalises the active stroke: that ended
+      // every precision stroke the instant it was started (a zero-length mark per tap, so the pen and the
+      // two-step shapes never drew between the taps).
+      if (
+        precisionAnchorPointerIdRef.current !== null &&
+        e.pointerId !== precisionAnchorPointerIdRef.current &&
+        e.pointerType === 'touch'
+      ) {
+        try {
+          (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+
       // ── Style mode: the press only ever selected a mark ───────────────────
       // Nothing was started on pointer-down (no stroke, no pan, no drag), so
       // there is nothing to finalise. Returning here also keeps a stale
@@ -10165,16 +10194,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // Pen: each tap is a single dab (begin + commit immediately).
-      if (tool === 'pen') {
-        beginDrawToolAt(ch, baseLw);
-        const pen = activeStrokeRef.current as StrokePen | null;
-        if (pen?.tool === 'pen' && pen.pts.length === 1) {
-          pen.pts.push({ ...ch });
-        }
-        commitActiveStroke();
-        return;
-      }
+      // Pen: like the two-step shapes below. The first tap starts the freehand line at the crosshair, the
+      // anchor finger then draws it (onPointerMove appends a point per move), the next tap or lifting the
+      // anchor ends it. A single start/stop tap with no movement still leaves one dot, as the old dab did.
 
       // Two-step drag tools (line/arrow/arrowAngle/circle/bodyCircle/rect/triangle):
       // first tap begins at the crosshair, second tap finalizes at the crosshair.
