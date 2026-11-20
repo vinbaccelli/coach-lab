@@ -351,3 +351,12 @@ export function overlayBottomInset(
   if (!overlaps || !(timeline.top < rail.bottom)) return 0;
   return Math.max(0, Math.round(rail.bottom - timeline.top));
 }
+
+/**
+ * Phone: width of the toolbar overlay. Collapsed it is the rail itself; with labels expanded it opens at
+ * its own wider size. (It used to reuse the rail width in both states, so the expanded toolbar was a
+ * 60 px strip with its labels cut off.)
+ */
+export function railOverlayWidth(labelsExpanded: boolean, railW: number, expandedW: number): number {
+  return labelsExpanded ? Math.max(railW, expandedW) : railW;
+}
