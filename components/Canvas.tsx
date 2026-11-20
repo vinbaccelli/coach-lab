@@ -8876,7 +8876,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const mcItemsEarly = measurementColumnRef.current;
         const canvasEarly = canvasRef.current;
         if (mcItemsEarly !== null && canvasEarly && (e.pointerType !== 'mouse' || e.button === 0)) {
-          const posEarly = getPos(e);
+          // The column is drawn in SCREEN space (it does not follow zoom or pan), so it is hit-tested, dragged
+          // and resized in screen space too. getPos() undoes the zoom/pan: the two only agree at 100% with no pan,
+          // which is why the column could not be grabbed or moved once the video was zoomed.
+          const posEarly = getPosFromPointerEvent(e);
           const cW = cssW(canvasEarly), cH = cssH(canvasEarly);
           const sc = mcScaleRef.current;
           const mW = Math.round(MC_BASE_W * sc);
@@ -9606,8 +9609,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // ── Measurement column resize (corner drag) ──────────────────────
       if (mcResizingRef.current && isDraggingRef.current) {
         const r = mcResizingRef.current;
+        const scr = getPosFromPointerEvent(e); // screen space, like the column itself
         // Diagonal drag: right/down enlarges. Scale range 0.6×–2.5×.
-        const delta = ((pos.x - r.startX) + (pos.y - r.startY)) / 2;
+        const delta = ((scr.x - r.startX) + (scr.y - r.startY)) / 2;
         mcScaleRef.current = Math.max(0.6, Math.min(2.5, r.origScale + delta / MC_BASE_W));
         renderDirtyRef.current = true;
         return;
@@ -9617,8 +9621,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (mcDraggingRef.current && isDraggingRef.current) {
         const canvas = canvasRef.current;
         if (canvas) {
-          const dx = pos.x - mcDraggingRef.current.startX;
-          const dy = pos.y - mcDraggingRef.current.startY;
+          const scr = getPosFromPointerEvent(e); // screen space, like the column itself
+          const dx = scr.x - mcDraggingRef.current.startX;
+          const dy = scr.y - mcDraggingRef.current.startY;
           if (mcTapRef.current && Math.hypot(dx, dy) > 6) mcTapRef.current.moved = true;
           // Kept inside the canvas, black bars included (lib/drawingTools.ts clampColumnPos); the generated video keeps it inside the frame.
           const cW = cssW(canvas), cH = cssH(canvas);
