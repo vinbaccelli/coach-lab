@@ -7,6 +7,11 @@ const withBundleAnalyzer = require('@next/bundle-analyzer')({
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // The type check and the lint run in CI on every PR (.github/workflows/ci.yml: `tsc --noEmit`, `npm test`). Next's
+  // own pass over the same files during `next build` is a second copy of it, and on Vercel's 8 GB build machine it
+  // was the step that ran 22 minutes and was killed for memory (Production build of c3e648a, "SIGKILL", 2026-11-20).
+  typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true },
   // Sentry (docs/SENTRY.md): the release is the git commit SHA and the
   // environment is Vercel's, both read at build time (Vercel sets them for every
   // build). Inlined into the bundles; empty / 'development' locally.
