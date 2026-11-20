@@ -7,6 +7,7 @@ import PersistentWebcamOverlay from '../components/PersistentWebcamOverlay';
 import FloatingRecordingIndicator from '../components/FloatingRecordingIndicator';
 import ReportProblemButton from '../components/ReportProblemButton';
 import ReviewPrompt from '../components/ReviewPrompt';
+import UploadTray from '../components/UploadTray';
 
 export const metadata: Metadata = {
   title: 'AngleMotion – Coaching intelligence platform',
@@ -78,6 +79,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <InstallPrompt />
         <ReportProblemButton />
         <ReviewPrompt />
+        <UploadTray />
       </body>
     </html>
   );

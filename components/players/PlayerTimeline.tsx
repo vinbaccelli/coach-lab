@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Image as ImageIcon, MessageSquare, Video } from 'lucide-react';
-import { uploadVideoToYouTube } from '@/lib/export/exportService';
+import { uploadQueue } from '@/lib/uploads/backgroundUploads';
 import HistoryFeed, { type HistoryPage } from '@/components/players/history/HistoryFeed';
 import type { HistoryItem } from '@/lib/players/history';
 
@@ -70,11 +70,29 @@ export default function PlayerTimeline({ playerId, playerName, canEdit, order, o
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.message ?? data.error ?? 'Could not upload the picture');
   });
-  const addVideo = (file: File) => run('Uploading to YouTube (unlisted)…', async () => {
-    const r = await uploadVideoToYouTube(file, `${playerName} — AngleMotion`);
-    if (!r.ok || !r.url) throw new Error(r.needsConnect ? 'Connect YouTube first (in the analysis app export menu), then try again.' : r.error ?? 'YouTube upload failed');
-    await postJson({ kind: 'video', youtube_url: r.url, body: '' });
-  });
+  // The upload runs in the app-wide background queue (lib/uploads/backgroundUploads.ts): it keeps going if the coach
+  // leaves this page or starts an analysis, shows in the tray, and adds the video to the timeline when it is on YouTube.
+  const addVideo = (file: File) => {
+    setErr(null);
+    const pid = playerId;
+    uploadQueue.enqueue({
+      file,
+      title: `${playerName} — AngleMotion`,
+      label: `Video for ${playerName}`,
+      afterUpload: async (url) => {
+        const res = await fetch(`/api/players/${pid}/timeline`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'video', youtube_url: url, body: '' }) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message ?? data.error ?? 'Could not save');
+        window.dispatchEvent(new CustomEvent('anglemotion:timeline-changed', { detail: { playerId: pid } }));
+      },
+    });
+  };
+  // A video finished in the background (maybe while the coach was elsewhere): refresh the list if it is this player's.
+  useEffect(() => {
+    const onChanged = (e: Event) => { if ((e as CustomEvent<{ playerId?: string }>).detail?.playerId === playerId) setReloadKey((k) => k + 1); };
+    window.addEventListener('anglemotion:timeline-changed', onChanged);
+    return () => window.removeEventListener('anglemotion:timeline-changed', onChanged);
+  }, [playerId]);
   const remove = async (item: HistoryItem) => {
     const res = await fetch(`/api/players/${playerId}/timeline?itemId=${encodeURIComponent(item.deletableId ?? '')}`, { method: 'DELETE' });
     if (!res.ok) throw new Error('Could not delete');
@@ -105,6 +123,7 @@ export default function PlayerTimeline({ playerId, playerName, canEdit, order, o
           <input ref={picRef} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void addPicture(f); }} />
           <input ref={vidRef} type="file" accept="video/*" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void addVideo(f); }} />
           {busy ? <div style={{ fontSize: 12, color: 'var(--cl-text-secondary)' }}>{busy}</div> : null}
+          <div style={{ fontSize: 11, color: 'var(--cl-text-muted)' }}>A video uploads in the background: you can leave this page or start an analysis while it goes. Keep this tab open until it is done.</div>
         </div>
       ) : null}
       {err ? <p style={{ color: 'var(--cl-destructive-text)', fontSize: 12 }}>{err}</p> : null}
