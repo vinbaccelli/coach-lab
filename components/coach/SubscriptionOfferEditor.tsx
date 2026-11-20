@@ -9,7 +9,7 @@
 
 import { Plus, Trash2 } from 'lucide-react';
 import {
-  FREQUENCIES, TERMS, MAX_OFFERS, subscriptionProblems, type SubscriptionOffer, type AnalysisOffer, type Frequency, type Term,
+  FREQUENCIES, TERMS, MAX_OFFERS, subscriptionProblems, comboLinkKey, type SubscriptionOffer, type AnalysisOffer, type Frequency, type Term,
 } from '@/lib/analysisPricing';
 
 const inputStyle: React.CSSProperties = {
@@ -47,6 +47,7 @@ export default function SubscriptionOfferEditor({
     if (next.length) set({ frequencies: next });
   };
   const setPay = (t: Term, url: string) => set({ payLinks: { ...value.payLinks, [t]: url } });
+  const setCombo = (key: string, url: string) => set({ comboLinks: { ...(value.comboLinks ?? {}), [key]: url } });
 
   return (
     <div data-testid="subscription-editor">
@@ -87,6 +88,21 @@ export default function SubscriptionOfferEditor({
           <textarea style={{ ...inputStyle, minHeight: 44, resize: 'vertical', fontFamily: 'inherit' }}
             value={o.description} maxLength={400} placeholder="What the client gets (length, format, turnaround…)"
             onChange={(e) => setOffer(o.id, { description: e.target.value })} />
+          <details style={{ marginTop: 8 }} data-testid={`combo-links-${o.id}`}>
+            <summary style={{ fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+              Payment links for this type ({FREQUENCIES.length * TERMS.length}, one per frequency and term)
+            </summary>
+            {FREQUENCIES.map((f) => TERMS.map((t) => {
+              const key = comboLinkKey(o.id, f.id, t.id);
+              return (
+                <div key={key} style={{ marginTop: 6 }}>
+                  <div style={{ fontSize: 11, color: 'var(--cl-text-muted)', marginBottom: 2 }}>{f.label} · {t.label}</div>
+                  <input style={inputStyle} value={value.comboLinks?.[key] ?? ''} placeholder="https://buy.stripe.com/…"
+                    onChange={(e) => setCombo(key, e.target.value)} />
+                </div>
+              );
+            }))}
+          </details>
         </div>
       ))}
       <button type="button" onClick={addOffer} disabled={value.offers.length >= MAX_OFFERS}
@@ -105,7 +121,7 @@ export default function SubscriptionOfferEditor({
         ))}
       </div>
 
-      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Where clients pay (your link, one per term)</div>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Fallback link per term (used when a type has no exact link above)</div>
       {TERMS.map((t) => (
         <div key={t.id} style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 12, color: 'var(--cl-text-muted)', marginBottom: 3 }}>
