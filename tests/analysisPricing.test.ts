@@ -80,3 +80,25 @@ test('missing payment links are listed; switched off says nothing', () => {
   assert.ok(subscriptionProblems(on).some((m) => /payment link/i.test(m)));
   assert.deepEqual(subscriptionProblems({ ...on, enabled: false }), []);
 });
+
+test('exact-combination payment links: used first, per-term link is the fallback, junk is dropped', async () => {
+  const { comboLinkKey, payLinkFor, subscriptionProblems } = await import('../lib/analysisPricing');
+  const raw = {
+    enabled: true,
+    offers: [{ id: 'quick', title: 'Quick', unitCents: 2000, currency: 'EUR' }],
+    frequencies: ['weekly', 'monthly'],
+    payLinks: { prepaid12: 'https://fallback.example/p12' },
+    comboLinks: {
+      [comboLinkKey('quick', 'weekly', 'prepaid6')]: 'https://buy.stripe.com/a',
+      [comboLinkKey('gone', 'weekly', 'prepaid6')]: 'https://buy.stripe.com/other-type',
+      [comboLinkKey('quick', 'monthly', 'prepaid6')]: 'javascript:alert(1)',
+    },
+  };
+  const o = sanitizeSubscriptionOffer(raw);
+  assert.equal(payLinkFor(o, 'quick', 'weekly', 'prepaid6'), 'https://buy.stripe.com/a');
+  assert.equal(payLinkFor(o, 'quick', 'weekly', 'prepaid12'), 'https://fallback.example/p12');
+  assert.equal(payLinkFor(o, 'quick', 'monthly', 'prepaid6'), '');
+  assert.equal(Object.keys(o.comboLinks ?? {}).length, 1);
+  // 1 type x 2 frequencies x 3 terms = 6 options; weekly/prepaid6 and the two prepaid12 have a link.
+  assert.deepEqual(subscriptionProblems(o), ['3 of 6 options have no payment link yet. Clients will see them but cannot pay through them.']);
+});

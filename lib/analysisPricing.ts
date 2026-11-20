@@ -40,8 +40,20 @@ export interface SubscriptionOffer {
   offers: AnalysisOffer[];
   /** Frequencies this coach offers. */
   frequencies: Frequency[];
-  /** A payment link (or instructions) per term; the coach's own channel. */
+  /** A payment link (or instructions) per term; the coach's own channel. Used when no exact link below. */
   payLinks: Partial<Record<Term, string>>;
+  /**
+   * One payment link per exact combination (analysis type, frequency, term), keyed by comboLinkKey():
+   * the amount to pay depends on all three, so a link per term alone cannot carry the right price.
+   */
+  comboLinks?: Record<string, string>;
+}
+
+export const comboLinkKey = (offerId: string, frequency: Frequency, term: Term) => `${offerId}|${frequency}|${term}`;
+
+/** The link for this exact choice: the exact-combination link first, else the coach's per-term link. */
+export function payLinkFor(offer: SubscriptionOffer, offerId: string, frequency: Frequency, term: Term): string {
+  return offer.comboLinks?.[comboLinkKey(offerId, frequency, term)] || offer.payLinks[term] || '';
 }
 
 export const EMPTY_SUBSCRIPTION_OFFER: SubscriptionOffer = {
@@ -147,11 +159,20 @@ export function sanitizeSubscriptionOffer(raw: unknown): SubscriptionOffer {
     const url = safeHttpUrl(pl[t.id]);
     if (url) payLinks[t.id] = url;
   }
+  const frequencies = freqs.length ? Array.from(new Set(freqs)) : EMPTY_SUBSCRIPTION_OFFER.frequencies;
+  const comboLinks: Record<string, string> = {};
+  const cl = (o.comboLinks && typeof o.comboLinks === 'object' ? o.comboLinks : {}) as Record<string, unknown>;
+  for (const offer of offers) for (const f of FREQUENCIES) for (const t of TERMS) {
+    const key = comboLinkKey(offer.id, f.id, t.id);
+    const url = safeHttpUrl(cl[key]);
+    if (url) comboLinks[key] = url;
+  }
   return {
     enabled: o.enabled === true && offers.length > 0,
     offers,
-    frequencies: freqs.length ? Array.from(new Set(freqs)) : EMPTY_SUBSCRIPTION_OFFER.frequencies,
+    frequencies,
     payLinks,
+    ...(Object.keys(comboLinks).length ? { comboLinks } : {}),
   };
 }
 
@@ -167,7 +188,14 @@ export function subscriptionProblems(offer: SubscriptionOffer): string[] {
   const complete = offer.offers.length - incomplete.length;
   if (complete === 0) problems.push('Add at least one analysis type with a title and a price, or nothing will show on your public page.');
   else if (incomplete.length) problems.push(`${incomplete.length} analysis type${incomplete.length > 1 ? 's' : ''} without a title or a price will not be shown.`);
-  const missingLinks = TERMS.filter((t) => !safeHttpUrl(offer.payLinks[t.id]));
-  if (missingLinks.length) problems.push(`No payment link yet for: ${missingLinks.map((t) => t.label).join(', ')}. Clients will see that option but cannot pay through it.`);
+  // Every option a client can pick (complete type x offered frequency x term) needs a link, exact or per-term.
+  const complete_ = offer.offers.filter((o) => text(o.title) && Number(o.unitCents) > 0);
+  let missing = 0;
+  let total = 0;
+  for (const o of complete_) for (const f of offer.frequencies) for (const t of TERMS) {
+    total += 1;
+    if (!safeHttpUrl(payLinkFor(offer, o.id, f, t.id))) missing += 1;
+  }
+  if (missing) problems.push(`${missing} of ${total} options have no payment link yet. Clients will see them but cannot pay through them.`);
   return problems;
 }

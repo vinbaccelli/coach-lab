@@ -8,7 +8,7 @@
 
 import { useState } from 'react';
 import {
-  FREQUENCIES, TERMS, quote, formatMoney, type SubscriptionOffer, type Frequency, type Term,
+  FREQUENCIES, TERMS, quote, formatMoney, payLinkFor, type SubscriptionOffer, type Frequency, type Term,
 } from '@/lib/analysisPricing';
 
 export default function SubscriptionPicker({ offer, accent }: { offer: SubscriptionOffer; accent: string }) {
@@ -20,7 +20,7 @@ export default function SubscriptionPicker({ offer, accent }: { offer: Subscript
   if (!chosen) return null;
   const q = quote(chosen.unitCents, frequency, term);
   const money = (c: number) => formatMoney(c, chosen.currency);
-  const link = offer.payLinks[term];
+  const link = payLinkFor(offer, chosen.id, frequency, term);
   const chip = (on: boolean): React.CSSProperties => ({
     padding: '8px 12px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', textAlign: 'left',
     border: `1.5px solid ${on ? accent : '#D9D9DE'}`, background: on ? `${accent}14` : '#fff', color: '#1c1c1e',
