@@ -9,7 +9,7 @@
 
 import { Plus, Trash2 } from 'lucide-react';
 import {
-  FREQUENCIES, TERMS, MAX_OFFERS, type SubscriptionOffer, type AnalysisOffer, type Frequency, type Term,
+  FREQUENCIES, TERMS, MAX_OFFERS, subscriptionProblems, type SubscriptionOffer, type AnalysisOffer, type Frequency, type Term,
 } from '@/lib/analysisPricing';
 
 const inputStyle: React.CSSProperties = {
@@ -31,6 +31,16 @@ export default function SubscriptionOfferEditor({
       }],
     });
   };
+  const problems = subscriptionProblems(value);
+  const toggleEnabled = (on: boolean) => {
+    // Switching on with nothing to sell would be dropped by the server: start with one blank type.
+    if (on && value.offers.length === 0) {
+      set({
+        enabled: true,
+        offers: [{ id: `offer-${Date.now().toString(36)}`, title: '', description: '', unitCents: 0, currency: 'EUR' }],
+      });
+    } else set({ enabled: on });
+  };
   const toggleFreq = (f: Frequency) => {
     const has = value.frequencies.includes(f);
     const next = has ? value.frequencies.filter((x) => x !== f) : [...value.frequencies, f];
@@ -41,7 +51,7 @@ export default function SubscriptionOfferEditor({
   return (
     <div data-testid="subscription-editor">
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
-        <input type="checkbox" checked={value.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
+        <input type="checkbox" checked={value.enabled} onChange={(e) => toggleEnabled(e.target.checked)} />
         Offer video analysis subscriptions on my public profile
       </label>
       <p style={{ fontSize: 12, color: 'var(--cl-text-muted)', margin: '0 0 14px' }}>
@@ -50,6 +60,12 @@ export default function SubscriptionOfferEditor({
         never handles the money. It needs at least one analysis type with a price.
       </p>
 
+      {problems.length > 0 && (
+        <div role="status" data-testid="subscription-problems"
+          style={{ margin: '0 0 14px', padding: '10px 12px', borderRadius: 10, background: 'rgba(255,196,0,0.12)', border: '1px solid rgba(255,196,0,0.45)', fontSize: 12, lineHeight: 1.5 }}>
+          {problems.map((m) => <div key={m}>{m}</div>)}
+        </div>
+      )}
       <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Analysis types</div>
       {value.offers.map((o) => (
         <div key={o.id} style={{ padding: 12, borderRadius: 12, border: '1px solid var(--cl-border)', background: '#FAFAFA', marginBottom: 8 }}>
