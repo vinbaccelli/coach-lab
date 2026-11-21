@@ -11,7 +11,9 @@ import {
   FREQUENCIES, TERMS, quote, formatMoney, payLinkFor, type SubscriptionOffer, type Frequency, type Term,
 } from '@/lib/analysisPricing';
 
-export default function SubscriptionPicker({ offer, accent }: { offer: SubscriptionOffer; accent: string }) {
+export default function SubscriptionPicker({
+  offer, accent, embedded = false,
+}: { offer: SubscriptionOffer; accent: string; embedded?: boolean }) {
   const [offerId, setOfferId] = useState(offer.offers[0]?.id ?? '');
   const freqs = FREQUENCIES.filter((f) => offer.frequencies.includes(f.id));
   const [frequency, setFrequency] = useState<Frequency>(freqs[0]?.id ?? 'monthly');
@@ -29,9 +31,9 @@ export default function SubscriptionPicker({ offer, accent }: { offer: Subscript
 
   return (
     <section data-testid="subscription-picker" aria-label="Video analysis subscription"
-      style={{ margin: '24px auto', maxWidth: 640, padding: 18, borderRadius: 16, border: '1px solid #E5E5EA', background: '#fff' }}>
-      <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Video analysis subscription</h2>
-      <div style={label}>Type of analysis</div>
+      style={embedded ? undefined : { margin: '24px auto', maxWidth: 640, padding: 18, borderRadius: 16, border: '1px solid #E5E5EA', background: '#fff' }}>
+      {!embedded && <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Video analysis subscription</h2>}
+      <div style={embedded ? { ...label, marginTop: 0 } : label}>Type of analysis</div>
       <div style={{ display: 'grid', gap: 8 }}>
         {offer.offers.map((o) => (
           <button key={o.id} type="button" aria-pressed={o.id === chosen.id} style={chip(o.id === chosen.id)} onClick={() => setOfferId(o.id)}>
