@@ -267,6 +267,8 @@ export default function FrameMaskEditor({
   const [racketBusy, setRacketBusy] = useState(false);
   const [racketNegative, setRacketNegative] = useState(false);
   const [racketNote, setRacketNote] = useState<string | null>(null);
+  // The raw load error behind a generic racketNote, shown small so a phone screenshot says what actually failed (out of memory vs a missing file vs a crash).
+  const [racketDetail, setRacketDetail] = useState<string | null>(null);
   const [racketReady, setRacketReady] = useState(false);
   const [racketPreparing, setRacketPreparing] = useState(false);
   /** Bumped to re-run the prepare step after the Object tool's SAM worker was released to save memory (phones). */
@@ -554,6 +556,7 @@ export default function FrameMaskEditor({
           // out of memory vs a missing file vs something else.
           const reason = (getLastWorkerEncodeError() || (await import('@/lib/stroMotionDraft/samRacket')).getLastSamError() || '').slice(0, 160);
           setRacketNote(objectSelectUnavailableNote(reason));
+          setRacketDetail(reason || 'no error text (the worker returned nothing)');
         }
       } catch (e) {
         console.warn('[samRacket] prepare failed:', e);
@@ -570,6 +573,7 @@ export default function FrameMaskEditor({
           // scripts/copy-ort-wasm.mjs on postinstall/predev/prebuild. A checkout
           // or deploy that skipped that step fails exactly here.
           const msg = e instanceof Error ? e.message : String(e);
+          setRacketDetail(msg.slice(0, 300));
           const looksLikeMissingAsset = /fetch|404|not found|failed to load|wasm|\.onnx|network/i.test(msg);
           setRacketNote(
             `Object select could not prepare this frame — ${msg}`
@@ -1563,7 +1567,7 @@ export default function FrameMaskEditor({
                 spaces to wrap at (URLs, wasm paths) and would otherwise push the
                 toolbar wider than the panel. */}
             {racketNote ? (
-              <span style={{ fontSize: 12, color: '#FFD08A', width: '100%', wordBreak: 'break-word' }}>{racketNote}</span>
+              <span style={{ fontSize: 12, color: '#FFD08A', width: '100%', wordBreak: 'break-word' }}>{racketNote}{racketDetail ? <span style={{ display: 'block', fontSize: 11, opacity: 0.7, marginTop: 4 }}>Detail: {racketDetail}</span> : null}</span>
             ) : null}
           </div>
         ) : null}
