@@ -44,6 +44,12 @@ export function autoRacketEnabled(objectType: string): boolean {
   const w = window as unknown as Record<string, unknown>;
   if (w.__autoRacket === true) return true;
   if (w.__autoRacket === false) return false;
+  // Link switch for phone testing (no console on a phone): …/analysis?racket=1 turns it ON, ?racket=0 OFF,
+  // and the choice is remembered in localStorage like the manual setting below.
+  try {
+    const q = new URLSearchParams(window.location.search).get('racket');
+    if (q === '1' || q === '0') window.localStorage.setItem('autoRacket', q);
+  } catch { /* no URL / storage blocked */ }
   let stored: string | null = null;
   try {
     stored = window.localStorage.getItem('autoRacket');
