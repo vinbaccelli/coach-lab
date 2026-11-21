@@ -8187,6 +8187,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   webcamPipBottomInsetPx={toolbarBottomReservePx}
                   showTourHelpInZoomCluster={toursEnabled}
                   poseFrameSkip={hasVideoBContent ? 1 : 0}
+                  compareMode={hasVideoBContent}
+                  watermarkMode={hasVideoBContent ? 'small' : 'full'}
                   panModeEnabled={panModeEnabled}
                   handPanActive={handPanActive}
                   onHandPanToggle={toggleHandPan}
@@ -8970,6 +8972,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       webcamPipMobileChrome={isMobile}
                       webcamPipBottomInsetPx={toolbarBottomReservePx}
                       poseFrameSkip={1}
+                      compareMode
+                      watermarkMode="off"
                       panModeEnabled={panModeEnabled}
                   handPanActive={handPanActive}
                   onHandPanToggle={toggleHandPan}

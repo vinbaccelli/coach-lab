@@ -643,6 +643,14 @@ export interface CanvasProps {
   onPanModeToggle?: () => void;
   /** When true, render guided-tour ? at top of zoom cluster (analysis mobile/desktop). */
   showTourHelpInZoomCluster?: boolean;
+  /**
+   * Two videos are open (A and B): each pane is short, so the zoom buttons become one small column at the
+   * top-right of the pane (never the wide row used on a phone held sideways), without the extra
+   * "Reset zoom" pill and the tour help button.
+   */
+  compareMode?: boolean;
+  /** The AngleMotion mark on this canvas: normal, smaller (A of an A/B pair), or none (B of the pair: one mark is enough). */
+  watermarkMode?: 'full' | 'small' | 'off';
   /** Fires when a region is selected in objectMultiplier mode */
   onObjMultiplierRegionSelected?: () => void;
 }
@@ -2440,6 +2448,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       onPanModeToggle,
       onObjMultiplierRegionSelected,
       showTourHelpInZoomCluster = false,
+      compareMode = false,
+      watermarkMode = 'full',
     },
     ref,
   ) {
@@ -3110,6 +3120,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const suppressTabCaptureMirrorRef = useRef(false);
     const poseSmoothPrevRef = useRef<Array<{ x: number; y: number; score: number; name: string }> | null>(null);
     const poseScheduleRef = useRef<{ kind: 'rvfc' | 'raf'; id: number } | null>(null);
+    const watermarkModeRef = useRef(watermarkMode);
+    useEffect(() => { watermarkModeRef.current = watermarkMode; }, [watermarkMode]);
     const poseFrameSkipRef = useRef(poseFrameSkip);
     useEffect(() => { poseFrameSkipRef.current = poseFrameSkip; }, [poseFrameSkip]);
 
@@ -7614,10 +7626,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // the picture, and underneath the playback dock that covers that strip.
         // `maxBottomY` then nudges it clear of the controls; on a surface with no
         // dock the clamp never binds.
-        drawVideoWatermark(ctx, W, H, {
-          x: dx, y: dy, w: dw, h: dh,
-          maxBottomY: dockTopRef.current,
-        });
+        if (watermarkModeRef.current !== 'off') {
+          drawVideoWatermark(ctx, W, H, {
+            x: dx, y: dy, w: dw, h: dh,
+            maxBottomY: dockTopRef.current,
+            scale: watermarkModeRef.current === 'small' ? 0.55 : 1,
+          });
+        }
 
         if (renderWaitersRef.current.length > 0) {
           const waiters = renderWaitersRef.current.splice(0);
@@ -10526,7 +10541,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // runs off the top of the screen (help, +, − at negative y). On short screens it becomes a row under
     // the +B / trash row instead, with slightly smaller buttons.
     const shortScreen = containerHeight > 0 && containerHeight < 420;
-    const zoomBtnSize = shortScreen || precisionTouchDraw ? 32 : 36;
+    const zoomBtnSize = compareMode ? 30 : shortScreen || precisionTouchDraw ? 32 : 36;
 
     const zoomControlBtnStyle: React.CSSProperties = {
       width: zoomBtnSize,
@@ -10846,18 +10861,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           data-tour-id="tour-zoom"
           style={{
             position: 'absolute',
-            ...(shortScreen
+            ...(shortScreen || compareMode
               ? { top: 'calc(env(safe-area-inset-top, 0px) + 50px)' }
               : { bottom: 'calc(var(--anglemotion-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))' }),
             right: 'calc(12px + env(safe-area-inset-right, 0px))',
             display: 'flex',
-            flexDirection: shortScreen ? 'row' : 'column',
-            gap: shortScreen ? 4 : 6,
+            flexDirection: shortScreen && !compareMode ? 'row' : 'column',
+            gap: shortScreen || compareMode ? 4 : 6,
             zIndex: 90,
             pointerEvents: 'auto',
           }}
         >
-          {showTourHelpInZoomCluster ? (
+          {showTourHelpInZoomCluster && !compareMode ? (
             <button
               type="button"
               data-tour-id="tour-help"
@@ -10947,7 +10962,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         {/* One-tap way back from any canvas zoom, top-left under the top bar:
             the bottom-right ⌂ can be under a fixed banner (iOS "Add to Home
             Screen") at 375 px. */}
-        {zoomedUi ? (
+        {zoomedUi && !compareMode ? (
           <button
             type="button"
             data-testid="zoom-reset-pill"
