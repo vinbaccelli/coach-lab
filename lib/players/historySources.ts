@@ -3,7 +3,7 @@ import { isMissingTable } from '@/lib/db/missingTable';
 import { parseTechnicalSheet } from '@/lib/players/technicalSheet';
 import { computeDerived, type TrackerEntry, type TrackerField, type TrackerMode } from '@/lib/players/trackers';
 import {
-  itemFromMeal, itemFromMetric, itemFromPlan, itemFromReport, itemFromTimeline, itemFromTrackerEntry, itemsFromSheet, mergePage,
+  itemFromChange, itemFromMeal, itemFromMetric, itemFromPlan, itemFromReport, itemFromTimeline, itemFromTrackerEntry, itemsFromSheet, mergePage,
   type Cursor, type HistoryFilter, type HistoryItem, type HistorySection, type HistoryType, type TrackerLite,
 } from '@/lib/players/history';
 
@@ -109,6 +109,11 @@ export async function loadHistory(client: SupabaseClient, o: HistoryOptions): Pr
   if (o.viewer === 'coach' && !coachOnly && want('report', 'technical')) {
     jobs.push(byCreated(() => db.from('player_entries').select('id,category,folder_label,body_text,screenshots,created_at').eq('player_id', o.playerId), f, c, L)
       .then((r) => take(r, itemFromReport)));
+  }
+  // The change log (Blueprint updates…): the coach's only, in the section it belongs to.
+  if (o.viewer === 'coach' && !coachOnly && (!f.types || f.types.includes('change'))) {
+    jobs.push(byCreated(() => db.from('player_changes').select('id,section,title,body,created_at').eq('player_id', o.playerId), f, c, L)
+      .then((r) => take(r, itemFromChange)));
   }
   // Dated technical comments (Forehand, Backhand…), from the player's sheet.
   if (!coachOnly && want('technical', 'technical')) {
