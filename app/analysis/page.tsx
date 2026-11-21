@@ -3275,6 +3275,8 @@ function Home() {
   const [stroVideoSpeed, setStroVideoSpeed] = useState(1);
   // Exported-video ghost timing: build-up (appear) / fade-behind (vanish) / all-on.
   const [stroLayerMode, setStroLayerMode] = useState<'appear' | 'vanish' | 'all'>('appear');
+  // Exported video: the ghost layers sit BEHIND the live player (needs a still camera; falls back to in front when the camera moves).
+  const [stroLayersBehind, setStroLayersBehind] = useState(true);
   const [stroExcludedFrames, setStroExcludedFrames] = useState<Set<number>>(new Set());
 
   const clearStroVideoPreview = useCallback(() => {
@@ -8162,6 +8164,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                   stroMotionVideoOrder={stroVideoOrder}
                   stroMotionGhostOpacity={stroGhostOpacity}
                   stroMotionLayerMode={stroLayerMode}
+                  stroMotionLayersBehind={stroLayersBehind}
                   stroMotionEndPlate={stroEndPlate}
                   stroMotionSubjectBox={null}
                   stroMotionFrameStops={stroMotionFrameStopsForCanvas}
@@ -9693,10 +9696,16 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           setStroLayerMode(m);
           clearStroVideoPreview();
         }}
+        layersBehind={stroLayersBehind}
+        onLayersBehindChange={(on) => {
+          setStroLayersBehind(on);
+          clearStroVideoPreview();
+        }}
         videoBlob={stroPreviewVideoBlobRef.current}
         settingsLines={[
           `Frames: ${stroMotionDraft?.frames.length ?? 0}${stroExcludedFrames.size > 0 ? ` (${(stroMotionDraft?.frames.length ?? 0) - stroExcludedFrames.size} included in still image)` : ''}`,
           `Direction: ${stroVideoOrder}`,
+          `Layers: ${stroLayersBehind ? 'behind the player' : 'in front of the player'}`,
           `Ghost layers: ${stroLayerMode === 'appear' ? 'Build up' : stroLayerMode === 'vanish' ? 'Fade behind' : 'All on'}`,
           `Ghost transparency: ${stroGhostOpacity !== undefined ? `${Math.round(stroGhostOpacity * 100)}%` : 'Auto'}`,
           `Video speed: ${stroVideoSpeed}×`,

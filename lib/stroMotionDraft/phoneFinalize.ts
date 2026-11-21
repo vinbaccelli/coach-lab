@@ -276,7 +276,7 @@ export class PhoneFirstComposite {
     options: StroMotionDraftCompositeOptions,
     requestRender: () => void,
   ): boolean {
-    if (options.overlayMode) return false;
+    if (options.overlayMode || options.behindMask) return false;
     const key = this.keyOf(ctx, options);
     const job = this.job;
     if (job && job.draft === draft) {
