@@ -13,6 +13,7 @@ import NutritionSection from '@/components/players/nutrition/NutritionSection';
 import HistoryFeed, { type HistoryPage } from '@/components/players/history/HistoryFeed';
 import { HISTORY_SECTIONS } from '@/lib/players/history';
 import { playerNutritionClient } from '@/components/players/nutrition/nutritionClient';
+import { sharedTabIds } from '@/lib/players/shareTabs';
 import ProfileTabs, { DEFAULT_PROFILE_TAB, PROFILE_TABS, isProfileTab, type ProfileTab } from '@/components/players/ProfileTabs';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
@@ -131,13 +132,14 @@ export default function SharedProfileClient({ token }: { token: string }) {
   const perms = data.permissions;
   const hasTrackers = (cat: string) => (data.trackers ?? []).some((t) => t.category === cat);
   const mayAdd = (k: 'progress' | 'biometrics' | 'fitness') => Boolean(data.canAdd && (can?.[k] ?? true));
-  const availTabs: ProfileTab[] = ['overview'];
-  if (perms?.see.timeline ?? true) availTabs.push('timeline');
-  if ((perms?.see.technical ?? true) && data.sheet.length > 0) availTabs.push('technical');
-  if ((perms?.see.progress ?? true) && (hasTrackers('progress') || series.length > 0 || mayAdd('progress'))) availTabs.push('progress');
-  if ((perms?.see.biometrics ?? true) && hasTrackers('biometrics')) availTabs.push('biometrics');
-  if ((perms?.see.fitness ?? true) && hasTrackers('fitness')) availTabs.push('fitness');
-  if (perms?.see.nutrition) availTabs.push('nutrition');
+  const availTabs: ProfileTab[] = sharedTabIds(perms?.see);
+  // A permitted tab with nothing in it yet says so, instead of the tab silently not existing.
+  const emptyTab: Partial<Record<ProfileTab, boolean>> = {
+    technical: data.sheet.length === 0,
+    progress: !hasTrackers('progress') && series.length === 0 && !mayAdd('progress'),
+    biometrics: !hasTrackers('biometrics'),
+    fitness: !hasTrackers('fitness'),
+  };
   const activeTab: ProfileTab = availTabs.includes(tab) ? tab : (PROFILE_TABS.find((t) => availTabs.includes(t.id))?.id ?? 'overview');
   const changeTab = (t: ProfileTab) => { setTab(t); try { const u = new URL(window.location.href); u.searchParams.set('tab', t); window.history.replaceState(null, '', u.toString()); } catch { /* the tab still changes */ } };
   const myEntries = (data.trackerEntries ?? []).filter((e) => e.author === 'link');
@@ -168,6 +170,13 @@ export default function SharedProfileClient({ token }: { token: string }) {
               {myEntries.length === 0 ? 'Nothing sent yet.' : `Sent by you: ${myEntries.length} · waiting for your coach: ${waiting} · approved: ${approved}${toFix ? ` · needs a fix: ${toFix}` : ''}`}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {emptyTab[activeTab] ? (
+        <div style={panel} data-testid="empty-tab">
+          <h2 style={{ margin: '0 0 6px', fontSize: 15 }}>{PROFILE_TABS.find((t) => t.id === activeTab)?.label}</h2>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--cl-text-secondary)' }}>Nothing here yet. Your coach has not added anything to this section.</p>
         </div>
       ) : null}
 
