@@ -1964,6 +1964,7 @@ function Home() {
     const secEnd = Math.max(secStart + 0.1, metricsSectionEnd ?? ((orderedNow[orderedNow.length - 1]?.timeSec ?? secStart) + 0.3));
     let trackBacked = !skeletonEnabled || (canvasRef.current?.isRangeBaked?.(secStart, secEnd) ?? false);
     if (!trackBacked && skeletonEnabled) {
+      recordStage('Generate: preparing the skeleton track');
       setProcessingStatus('Preparing perfect skeleton for the recording…');
       precisionAbortRef.current = false;
       setPrecisionTrackState('running');
@@ -2013,8 +2014,10 @@ function Home() {
         ? `Recording at ${targetRate}× with frame-exact skeleton…`
         : `Recording master at ${masterRate}× for best skeleton…`);
       recorder.start();
+      recordStage('Generate: recording the replay');
       await handleReplaySnapshots(recorder, { playRate: masterRate, holdScale });
       const webmBlob = await done;
+      recordStage('Generate: recorded, converting to MP4');
       setProcessingStatus(retimeFactor < 1 ? `Rendering at ${targetRate}× speed…` : 'Converting to MP4…');
       let finalBlob = webmBlob;
       const conv = await convertWebmBlobToMp4(webmBlob, { retimeFactor });
@@ -2041,6 +2044,7 @@ function Home() {
       const url = URL.createObjectURL(finalBlob);
       setGenerateVideoUrl(url);
       setGenerateVideoBlob(finalBlob);
+      recordStage(`Generate: video ready (${Math.round(finalBlob.size / 1e6)} MB), showing the result`);
       if (conv.ok) {
         setProcessingStatus('Replay video ready — download below');
         setGenerateConversionNotice(null);
@@ -2051,6 +2055,7 @@ function Home() {
       try { stream?.getTracks().forEach(t => t.stop()); } catch { /* noop */ }
       setExportForceVideoPaint(false);
       setGenerateRecording(false);
+      recordStage('Generate: finished, back on the analysis screen');
     }
   }, [snapshots, generateRecording, generateVideoUrl, handleReplaySnapshots, generateReplayRate, skeletonEnabled, metricsSectionStart, metricsSectionEnd, runPrecisionPass]);
 
@@ -9652,6 +9657,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       <StroMotionPreviewModal
         open={stroPreviewModalOpen}
         onClose={() => {
+          recordStage('Motion Layer preview closed (Done)');
           setStroPreviewModalOpen(false);
           setStroPreviewError(null);
         }}
@@ -10362,7 +10368,7 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           <GenerateWorkspace
             open={generateWorkspaceOpen}
             hidden={replayActive || generateRecording}
-            onClose={() => setGenerateWorkspaceOpen(false)}
+            onClose={() => { recordStage('Generate result closed (Done)'); setGenerateWorkspaceOpen(false); }}
             snapshots={orderedSnapshots}
             videoUrl={generateVideoUrl}
             videoBlob={generateVideoBlob}

@@ -41,6 +41,7 @@ import { eraseUnderRing } from '@/lib/eraser';
 import { liveColumnRows, overlayTransform, type ColumnRow, type VideoBox } from '@/lib/exportOverlay';
 import { HelpCircle, Hand } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, pickStroVideoMime, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
+import { recordStage } from '@/lib/restartBreadcrumb';
 import { buildMedianBackgroundPlate } from '@/lib/stroMotionDraft/backgroundPlate';
 import { createLiveOcclusion, type LiveOcclusionBuilder } from '@/lib/stroMotionDraft/liveOcclusionCanvas';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
@@ -4441,6 +4442,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 
         // "Layers behind the player": the clean background of the section, to tell the live player from the rest of each frame.
+        recordStage('Motion Layer video: preparing');
         let occlusion: LiveOcclusionBuilder | null = null;
         if (stroMotionLayersBehindRef.current) {
           try {
@@ -4497,6 +4499,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             stroMotionVisibleStartRef.current = visibleStart;
             stroMotionBehindMaskRef.current = liveBitmap && occlusion ? occlusion.maskFor(liveBitmap) : null;
 
+            if (step % 20 === 0) recordStage(`Motion Layer video: recording step ${step}/${totalSteps}`);
             await waitRender();
             await waitRender();
             // Composite for this step is on the canvas — capture exactly one frame.
@@ -4518,10 +4521,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             await new Promise((resolve) => setTimeout(resolve, intervalMs));
           }
 
+          recordStage('Motion Layer video: finishing the recording');
           recorder.stop();
           await new Promise<void>((resolve) => { recorder.onstop = () => resolve(); });
 
           const blob = new Blob(chunks, { type: mimeType });
+          recordStage(`Motion Layer video: ready (${Math.round(blob.size / 1e6)} MB)`);
           const url = URL.createObjectURL(blob);
           return { ok: true, blob, url };
         } catch {
