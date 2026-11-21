@@ -14,6 +14,7 @@
  *   t-<id>    measurement                  (player_tracker_entries without a legacy value)
  *   meal-<id> meal                         (player_meal_logs)
  *   plan-<id> nutrition plan / new version (player_nutrition_plans, its start date)
+ *   chg-<id>  a change that overwrote its old value, e.g. the Blueprint (player_changes; coach only)
  *
  * Order: the day the item is about (newest first), then when it was created, then the key, so a
  * page boundary is exact. The cursor is that triple.
@@ -23,14 +24,14 @@ import { MEAL_LABELS, type MealCategory } from '@/lib/players/nutrition';
 import { describeEntry, formatValue, type TrackerDefinition, type TrackerEntry } from '@/lib/players/trackers';
 import type { SharePermissions } from '@/lib/players/sharePermissions';
 
-export const HISTORY_TYPES = ['comment', 'picture', 'video', 'report', 'technical', 'measurement', 'meal', 'plan'] as const;
+export const HISTORY_TYPES = ['comment', 'picture', 'video', 'report', 'technical', 'measurement', 'meal', 'plan', 'change'] as const;
 export type HistoryType = (typeof HISTORY_TYPES)[number];
 export const HISTORY_SECTIONS = ['technical', 'progress', 'biometrics', 'fitness', 'nutrition', 'timeline'] as const;
 export type HistorySection = (typeof HISTORY_SECTIONS)[number];
 
 export const TYPE_LABELS: Record<HistoryType, string> = {
   comment: 'Comments', picture: 'Pictures', video: 'Videos', report: 'Reports', technical: 'Technical notes',
-  measurement: 'Measurements', meal: 'Meals', plan: 'Nutrition plans',
+  measurement: 'Measurements', meal: 'Meals', plan: 'Nutrition plans', change: 'Changes',
 };
 export const SECTION_LABELS: Record<HistorySection, string> = {
   technical: 'Technical', progress: 'Progress', biometrics: 'Biometrics', fitness: 'Fitness', nutrition: 'Nutrition', timeline: 'Timeline',
@@ -227,6 +228,13 @@ export function itemFromPlan(p: { id: string; title: string; starts_on: string; 
     body: [facts, p.ends_on ? `Until ${p.ends_on}` : ''].filter(Boolean).join('\n') || undefined,
     author: 'coach',
   };
+}
+
+/** A row of the change log (player_changes): when something overwritten (the Blueprint) was changed, and what. */
+export function itemFromChange(r: { id: string; section: string; title: string; body: string | null; created_at: string }): HistoryItem | null {
+  const section = (HISTORY_SECTIONS as readonly string[]).includes(r.section) ? (r.section as HistorySection) : null;
+  if (!section || !r.title) return null;
+  return { key: `chg-${r.id}`, type: 'change', section, date: day(r.created_at), created_at: isoMs(r.created_at), title: r.title, body: r.body || undefined, author: 'coach' };
 }
 
 /** Dated comments of the technical sheet's tracking rows (Forehand…). They have no creation time: the day is used. */

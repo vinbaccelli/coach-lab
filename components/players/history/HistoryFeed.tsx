@@ -21,6 +21,7 @@ const PAGE = 30;
 const TYPE_SECTIONS: Record<HistoryType, HistorySection[]> = {
   comment: ['timeline'], picture: ['timeline'], video: ['timeline'], report: ['technical'], technical: ['technical'],
   measurement: ['progress', 'biometrics', 'fitness'], meal: ['nutrition'], plan: ['nutrition'],
+  change: ['technical', 'progress', 'biometrics', 'fitness', 'nutrition', 'timeline'],
 };
 
 const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
@@ -142,7 +143,7 @@ export default function HistoryFeed({ fetchPage, viewer, sections = [...HISTORY_
     }
   };
 
-  const offeredTypes = HISTORY_TYPES.filter((t) => (viewer === 'coach' || t !== 'report') && TYPE_SECTIONS[t].some((s) => sections.includes(s)));
+  const offeredTypes = HISTORY_TYPES.filter((t) => (viewer === 'coach' || (t !== 'report' && t !== 'change')) && TYPE_SECTIONS[t].some((s) => sections.includes(s)));
   const nActive = filter.types.length + filter.sections.length + (filter.author ? 1 : 0) + (filter.from || filter.to ? 1 : 0);
 
   const row = (t: HistoryItem, handle: React.ReactNode) => (

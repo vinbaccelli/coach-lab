@@ -5,6 +5,7 @@ import { requireFeature } from '@/lib/entitlements.server';
 import { trashDriveFile } from '@/lib/google/drive';
 import { deletePlayer, supabaseDeleteStore } from '@/lib/players/deletePlayer';
 import { sanitizeBlueprint } from '@/lib/players/blueprint';
+import { summarizeBlueprintChange } from '@/lib/players/changes';
 
 // googleapis (Drive trash on DELETE) needs the Node runtime; a delete touches Drive and Storage.
 export const runtime = 'nodejs';
@@ -52,7 +53,13 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     blueprint: unknown;
   }>;
   // The Blueprint (chosen variants + fundamentals marks) is cleaned here: the browser is not trusted.
-  if ('blueprint' in body) body.blueprint = sanitizeBlueprint(body.blueprint);
+  let blueprintBefore: unknown;
+  if ('blueprint' in body) {
+    body.blueprint = sanitizeBlueprint(body.blueprint);
+    // What it was, to stamp the change on the timeline afterwards (best effort: a failed read just means no stamp).
+    const prev = await session.supabase.from('players').select('blueprint').eq('id', id).maybeSingle<{ blueprint: unknown }>();
+    blueprintBefore = prev.data?.blueprint;
+  }
 
   const { data, error } = await session.supabase
     .from('players')
@@ -65,6 +72,17 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // The timeline records when the Blueprint was saved or changed (player_changes). Never fails the save: if
+  // the table does not exist yet or the insert fails, the Blueprint is saved all the same, without a stamp.
+  if ('blueprint' in body) {
+    const change = summarizeBlueprintChange(blueprintBefore, body.blueprint);
+    if (change) {
+      try {
+        await session.supabase.from('player_changes').insert({ coach_id: session.userId, player_id: id, section: 'technical', ...change });
+      } catch { /* no stamp */ }
+    }
+  }
   return NextResponse.json({ player: data });
 }
 
