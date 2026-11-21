@@ -7807,10 +7807,13 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
       {restartNotice && (
         <div
           role="status"
+          // Tap anywhere on the notice to dismiss it. It sits BELOW the status bar / camera island (safe area): at top: 8 the
+          // close button was under the status bar on an iPhone Home Screen app, where taps do not reach the page.
+          onClick={() => setRestartNotice(null)}
           style={{
-            position: 'fixed', top: 8, left: 8, right: 8, zIndex: 100000,
+            position: 'fixed', top: 'calc(env(safe-area-inset-top, 0px) + 8px)', left: 8, right: 8, zIndex: 100000,
             display: 'flex', alignItems: 'center', gap: 8,
-            padding: '8px 12px', borderRadius: 10,
+            padding: '8px 4px 8px 12px', borderRadius: 10, cursor: 'pointer',
             background: 'rgba(255,255,255,0.97)', color: '#1D1D1F',
             border: '1px solid #D1D1D6', boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
             fontSize: 13, lineHeight: 1.35,
@@ -7820,8 +7823,8 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
           <button
             type="button"
             aria-label="Dismiss"
-            onClick={() => setRestartNotice(null)}
-            style={{ border: 'none', background: 'transparent', fontSize: 18, lineHeight: 1, padding: '2px 6px', cursor: 'pointer', color: '#1D1D1F' }}
+            onClick={(e) => { e.stopPropagation(); setRestartNotice(null); }}
+            style={{ border: 'none', background: 'transparent', fontSize: 24, lineHeight: 1, width: 44, height: 44, flexShrink: 0, cursor: 'pointer', color: '#1D1D1F' }}
           >
             ×
           </button>
