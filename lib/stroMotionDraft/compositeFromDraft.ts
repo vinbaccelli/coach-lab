@@ -103,7 +103,14 @@ export interface StroMotionDraftCompositeOptions {
    * directly over whatever is already on ctx (e.g. the live video frame).
    */
   overlayMode?: boolean;
+  /**
+   * "Layers behind the player": a canvas whose alpha marks the LIVE player (liveOcclusion.ts). The ghost layers are
+   * drawn on their own and cleared where this mask is set, so they sit behind the live player instead of over it.
+   */
+  behindMask?: CanvasImageSource | null;
 }
+
+let behindScratch: HTMLCanvasElement | null = null;
 
 export function renderStroMotionDraftComposite(
   ctx: CanvasRenderingContext2D,
@@ -122,6 +129,7 @@ export function renderStroMotionDraftComposite(
     videoOrder = 'forward',
     endPlate = null,
     overlayMode = false,
+    behindMask = null,
   } = options;
 
   const pickMask = resolveMask
@@ -169,18 +177,44 @@ export function renderStroMotionDraftComposite(
   const currentFrame = slice.length ? slice[slice.length - 1] : null;
   const painted = [...slice].sort((a, b) => a.timeSec - b.timeSec);
 
-  for (const frame of painted) {
-    const mask = pickMask(frame);
-    if (!frame.sourceFrame || !mask) continue;
+  const drawGhosts = (target: CanvasRenderingContext2D, to: { x: number; y: number; w: number; h: number }) => {
+    for (const frame of painted) {
+      const mask = pickMask(frame);
+      if (!frame.sourceFrame || !mask) continue;
 
-    const isCurrent = frame === currentFrame;
-    const ghostAlpha = isCurrent
-      ? 1.0
-      : fadeMode === 'temporal'
-        ? temporalGhostOpacity(frame.index, total)
-        : opacity;
+      const isCurrent = frame === currentFrame;
+      const ghostAlpha = isCurrent
+        ? 1.0
+        : fadeMode === 'temporal'
+          ? temporalGhostOpacity(frame.index, total)
+          : opacity;
 
-    renderMaskedFrame(ctx, frame.sourceFrame, mask, dest, ghostAlpha, scratch);
+      renderMaskedFrame(target, frame.sourceFrame, mask, to, ghostAlpha, scratch);
+    }
+  };
+
+  if (behindMask) {
+    // The ghosts on their own canvas (at the current zoom's pixel density), cleared where the live player is, then laid over the live frame.
+    const k = Math.max(0.1, ctx.getTransform().a || 1);
+    const tw = Math.max(1, Math.round(dest.w * k));
+    const th = Math.max(1, Math.round(dest.h * k));
+    const ghostCanvas = behindScratch ?? (behindScratch = document.createElement('canvas'));
+    if (ghostCanvas.width !== tw) ghostCanvas.width = tw;
+    if (ghostCanvas.height !== th) ghostCanvas.height = th;
+    const gctx = ghostCanvas.getContext('2d');
+    if (gctx) {
+      gctx.setTransform(1, 0, 0, 1, 0, 0);
+      gctx.clearRect(0, 0, tw, th);
+      gctx.setTransform(k, 0, 0, k, 0, 0);
+      drawGhosts(gctx, { x: 0, y: 0, w: dest.w, h: dest.h });
+      gctx.setTransform(1, 0, 0, 1, 0, 0);
+      gctx.globalCompositeOperation = 'destination-out';
+      try { gctx.drawImage(behindMask, 0, 0, tw, th); } catch { /* no mask this frame: the ghosts stay in front */ }
+      gctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(ghostCanvas, dest.x, dest.y, dest.w, dest.h);
+    }
+  } else {
+    drawGhosts(ctx, dest);
   }
 
   ctx.restore();

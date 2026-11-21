@@ -41,6 +41,8 @@ import { eraseUnderRing } from '@/lib/eraser';
 import { liveColumnRows, overlayTransform, type ColumnRow, type VideoBox } from '@/lib/exportOverlay';
 import { HelpCircle, Hand } from 'lucide-react';
 import { renderStroMotionComposite, exportStroMotionVideo, pickStroVideoMime, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
+import { buildMedianBackgroundPlate } from '@/lib/stroMotionDraft/backgroundPlate';
+import { createLiveOcclusion, type LiveOcclusionBuilder } from '@/lib/stroMotionDraft/liveOcclusionCanvas';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
 import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 import { PhoneFirstComposite } from '@/lib/stroMotionDraft/phoneFinalize';
@@ -562,6 +564,8 @@ export interface CanvasProps {
   stroMotionGhostOpacity?: number;
   /** Exported-video ghost timing: build-up / fade-behind / all-on. */
   stroMotionLayerMode?: 'appear' | 'vanish' | 'all';
+  /** Exported video: draw the ghost layers BEHIND the live player (needs a still camera), instead of over it. */
+  stroMotionLayersBehind?: boolean;
   /** End-frame bitmap — required when stroMotionBackground === 'end'. */
   stroMotionEndPlate?: ImageBitmap | null;
   /** Subject box preview before generate (video-normalized 0..1) */
@@ -2412,6 +2416,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       stroMotionVideoOrder = 'forward',
       stroMotionGhostOpacity,
       stroMotionLayerMode,
+      stroMotionLayersBehind = false,
       stroMotionEndPlate,
       stroMotionSubjectBox,
       stroMotionFrameStops,
@@ -3091,6 +3096,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // Coach-facing ghost-layer timing mode for the exported video (see the
     // export loop). undefined → derive from videoOrder for back-compat.
     const stroMotionLayerModeRef = useRef<'appear' | 'vanish' | 'all' | undefined>(stroMotionLayerMode);
+    const stroMotionLayersBehindRef = useRef(stroMotionLayersBehind);
+    useEffect(() => { stroMotionLayersBehindRef.current = stroMotionLayersBehind; }, [stroMotionLayersBehind]);
+    // The live-player mask of the frame being recorded (export only; null = layers over the live frame).
+    const stroMotionBehindMaskRef = useRef<CanvasImageSource | null>(null);
     const stroMotionVisibleStartRef = useRef(0);
     const stroMotionEndPlateRef = useRef<ImageBitmap | null>(stroMotionEndPlate ?? null);
     // Overlay mode: ghost frames drawn over live video (no background plate). Used during video export.
@@ -4431,6 +4440,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const chunks: Blob[] = [];
         recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 
+        // "Layers behind the player": the clean background of the section, to tell the live player from the rest of each frame.
+        let occlusion: LiveOcclusionBuilder | null = null;
+        if (stroMotionLayersBehindRef.current) {
+          try {
+            const plate = await buildMedianBackgroundPlate(video, startTime, endTime);
+            if (plate) occlusion = createLiveOcclusion(plate);
+          } catch { occlusion = null; }
+        }
+
         try {
           recorder.start();
 
@@ -4477,6 +4495,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }
             stroMotionVisibleCountRef.current = visibleCount;
             stroMotionVisibleStartRef.current = visibleStart;
+            stroMotionBehindMaskRef.current = liveBitmap && occlusion ? occlusion.maskFor(liveBitmap) : null;
 
             await waitRender();
             await waitRender();
@@ -4508,6 +4527,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         } catch {
           return { ok: false, reason: 'record-failed' };
         } finally {
+          stroMotionBehindMaskRef.current = null;
+          occlusion?.dispose();
           stroMotionVisibleCountRef.current = savedVisible;
           stroMotionVisibleStartRef.current = 0;
           stroMotionCanvasPreviewRef.current = savedPreview;
@@ -6293,6 +6314,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               videoOrder: stroMotionVideoOrderRef.current,
               endPlate: stroMotionEndPlateRef.current,
               overlayMode: stroMotionOverlayModeRef.current,
+              behindMask: stroMotionBehindMaskRef.current,
               ...(stroMotionGhostOpacityRef.current !== undefined
                 ? { fadeMode: 'uniform' as const, opacity: stroMotionGhostOpacityRef.current }
                 : {}),
@@ -6438,6 +6460,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             videoOrder: stroMotionVideoOrderRef.current,
             endPlate: stroMotionEndPlateRef.current,
             overlayMode: stroMotionOverlayModeRef.current,
+            behindMask: stroMotionBehindMaskRef.current,
             ...(stroMotionGhostOpacityRef.current !== undefined
               ? { fadeMode: 'uniform' as const, opacity: stroMotionGhostOpacityRef.current }
               : {}),
