@@ -476,15 +476,81 @@ function DiscoveryCallout({ note }: { note: DiscoveryNote }) {
   );
 }
 
-function TieredAnalysisSection({ block }: { block: TieredAnalysisBlock }) {
+/**
+ * One of the two choices at the top of Video Analysis. A real button with aria-expanded, at least 44px
+ * tall; the body is only mounted while open, so a closed choice costs the page nothing.
+ */
+function ChoiceHeader({
+  id, open, onToggle, title, hint, badge,
+}: { id: string; open: boolean; onToggle: () => void; title: string; hint: string; badge?: string }) {
+  return (
+    <button
+      type="button"
+      className="cp-press"
+      aria-expanded={open}
+      aria-controls={`${id}-panel`}
+      id={`${id}-header`}
+      onClick={onToggle}
+      style={{
+        width: '100%', minHeight: 56, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
+        textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', color: 'var(--cl-text-primary)',
+        border: open ? '1.5px solid var(--cl-accent)' : HAIRLINE, borderRadius: 12,
+        background: open ? 'var(--cl-accent-soft)' : 'var(--cl-bg-panel)',
+      }}
+    >
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 15, fontWeight: 700 }}>{title}</span>
+          {badge && (
+            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'var(--cl-accent)', color: '#fff' }}>
+              {badge}
+            </span>
+          )}
+        </span>
+        <span style={{ display: 'block', marginTop: 2, fontSize: 12, color: 'var(--cl-text-secondary)' }}>{hint}</span>
+      </span>
+      <ChevronDown size={18} aria-hidden="true" style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+    </button>
+  );
+}
+
+function TieredAnalysisSection({
+  block, subscription, accent,
+}: { block: TieredAnalysisBlock; subscription?: SubscriptionOffer; accent: string }) {
+  // With a subscription on offer it is shown first and open: the better deal for the player (10-20% off)
+  // and for the coach (recurring clients). Single analyses stay one tap away.
+  const hasSub = Boolean(subscription?.enabled && subscription.offers.length > 0);
+  const [open, setOpen] = useState<'subscription' | 'single'>(hasSub ? 'subscription' : 'single');
+  const tiers = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {block.tiers.map(tier => (
+        <AnalysisTierCard key={tier.id} tier={tier} />
+      ))}
+    </div>
+  );
   return (
     <Section id={block.id}>
       <SectionHeading title={block.title} description={block.description} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {block.tiers.map(tier => (
-          <AnalysisTierCard key={tier.id} tier={tier} />
-        ))}
-      </div>
+      {hasSub && subscription ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <ChoiceHeader
+            id="va-subscription" open={open === 'subscription'} onToggle={() => setOpen('subscription')}
+            title="Subscription" badge="Best value" hint="Regular analysis on your schedule. Save 10-20%."
+          />
+          {open === 'subscription' && (
+            <div id="va-subscription-panel" role="region" aria-labelledby="va-subscription-header" style={{ ...CARD, padding: 18 }}>
+              <SubscriptionPicker offer={subscription} accent={accent} embedded />
+            </div>
+          )}
+          <ChoiceHeader
+            id="va-single" open={open === 'single'} onToggle={() => setOpen('single')}
+            title="Single analysis & packages" hint="One-off analysis of 1 to 5 strokes."
+          />
+          {open === 'single' && (
+            <div id="va-single-panel" role="region" aria-labelledby="va-single-header">{tiers}</div>
+          )}
+        </div>
+      ) : tiers}
       {block.discovery && <DiscoveryCallout note={block.discovery} />}
     </Section>
   );
@@ -494,10 +560,12 @@ function TieredAnalysisSection({ block }: { block: TieredAnalysisBlock }) {
    Remaining block renderers
    ──────────────────────────────────────────────────────────────────────────── */
 
-function BlockRenderer({ block }: { block: CoachBlock }) {
+function BlockRenderer({
+  block, subscription, accent,
+}: { block: CoachBlock; subscription?: SubscriptionOffer; accent: string }) {
   switch (block.kind) {
     case 'tieredAnalysis':
-      return <TieredAnalysisSection block={block} />;
+      return <TieredAnalysisSection block={block} subscription={subscription} accent={accent} />;
 
     case 'offer':
       return (
@@ -1119,10 +1187,14 @@ function CuratedProfile({
   profile,
   avatarUrl,
   bioLines,
+  subscription,
+  accent,
 }: {
   profile: CuratedCoachProfile;
   avatarUrl?: string;
   bioLines: string[];
+  subscription?: SubscriptionOffer;
+  accent: string;
 }) {
   return (
     <div style={{ maxWidth: COLUMN, margin: '0 auto', padding: '32px 20px 72px' }}>
@@ -1192,7 +1264,7 @@ function CuratedProfile({
 
       {/* ── Blocks, in the coach's own order ── */}
       {profile.blocks.map(block => (
-        <BlockRenderer key={block.id} block={block} />
+        <BlockRenderer key={block.id} block={block} subscription={subscription} accent={accent} />
       ))}
 
       <DiscoveryFooter />
@@ -1364,11 +1436,14 @@ export default function CoachPublicProfile({ slug, dbProfile }: { slug: string; 
           profile={curated}
           avatarUrl={resolveAvatarUrl(dbProfile?.avatarUrl) ?? curated.avatarUrl}
           bioLines={parseBioLines(dbProfile?.bio) ?? curated.bioLines}
+          subscription={dbProfile?.subscription}
+          accent={dbProfile?.accentColor || '#007AFF'}
         />
       ) : (
         <GenericProfile profile={generic as CoachProfileData} />
       )}
-      {dbProfile?.subscription?.enabled && (
+      {/* A curated profile shows the subscription inside Video Analysis (first choice); the others keep it at the end. */}
+      {!curated && dbProfile?.subscription?.enabled && (
         <SubscriptionPicker offer={dbProfile.subscription} accent={dbProfile.accentColor || '#007AFF'} />
       )}
     </div>
