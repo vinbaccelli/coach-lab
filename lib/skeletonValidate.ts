@@ -35,7 +35,12 @@ const LIMB_REF_HALF = 15;        // samples each side for the rolling reference 
 const SWAP_RATIO = 0.6;          // swapped assignment must be this much cheaper
 const SWAP_MIN_SEP = 0.08;       // L/R must be ≥ this many body heights apart (else crossing, not a swap)
 const SWAP_MIN_MOVE = 0.04;      // …and the unswapped step must be a real move
-const OUTLIER_BH = 0.25;         // distance from neighbour midpoint, in body heights
+const OUTLIER_BH = 0.25;
+const OUTLIER_CONFIDENT_SCORE = 0.5; // a joint the model is this sure of is only dropped for a far bigger jump:
+const OUTLIER_CONFIDENT_MULT = 2;    // a fast racket-arm swing curves away from the neighbour midpoint and was being erased
+const HOP_BH = 0.8;              // step -1: a torso this many body heights from where it is in the surrounding frames is a different person
+const HOP_WINDOW_S = 0.4;        // …judged against the median torso position within this many seconds either side
+const HOP_MIN_REFS = 4;
 const BONE_LONG = 1.5;           // × local median length
 const BONE_BLAME_BH = 0.08;      // blamed endpoint must also be off its neighbours by this much
 const NEIGHBOUR_MAX_DT = 0.12;   // neighbours further apart than this (s) aren't a usable reference
@@ -92,6 +97,32 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
   if (hs.length < 4) return { samples, report, dropped: noDrops() };
   const BH = median(hs);
   if (!(BH > 20)) return { samples, report, dropped: noDrops() };
+
+
+  // ── -1. IDENTITY HOP: on a two-player clip the detector sometimes jumps to the OTHER person for a
+  // few frames. Every joint of such a frame is consistently wrong, and a run of 2–4 hopped frames
+  // makes each other (and the good frames next to them) look like valid neighbours, so the per-joint
+  // checks below never fire. Judge the torso as a whole against the median torso position in the
+  // surrounding window: a jump of more than HOP_BH body heights is not the tracked player.
+  const hopped: boolean[] = new Array(out.length).fill(false);
+  {
+    const torso = idx.map((m) => {
+      const ks = ['left_shoulder', 'right_shoulder', 'left_hip', 'right_hip'].map((n) => m.get(n)).filter((k) => k && k.score >= 0.3) as TrackKeypoint[];
+      return ks.length >= 3 ? { x: ks.reduce((a, k) => a + k.x, 0) / ks.length, y: ks.reduce((a, k) => a + k.y, 0) / ks.length } : null;
+    });
+    for (let i = 0; i < out.length; i++) {
+      const c = torso[i];
+      if (!c) continue;
+      const xs: number[] = [], ys: number[] = [];
+      for (let j = 0; j < out.length; j++) {
+        const o = torso[j];
+        if (j !== i && o && Math.abs(out[j].t - out[i].t) <= HOP_WINDOW_S) { xs.push(o.x); ys.push(o.y); }
+      }
+      if (xs.length < HOP_MIN_REFS) continue;
+      if (Math.hypot(c.x - median(xs), c.y - median(ys)) > HOP_BH * BH) hopped[i] = true;
+    }
+    hopped.forEach((h, i) => { if (h) for (const k of out[i].kps) k.score = Math.min(k.score, INVALID_SCORE); });
+  }
 
   // ── 0. LIMB ASSIGNMENT INSIDE THE FRAME (knee, ankle, elbow, wrist) ─────
   // Step 1 below compares a frame with the previous one, so a swap that is already there at the
@@ -211,7 +242,7 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
     for (const [n, k] of idx[i]) {
       if (k.score < MIN_SCORE) { if (k.score > INVALID_SCORE) mark(i, n, 'invalidLowScore'); continue; }
       const dev = deviation(i, n);
-      if (dev != null && dev > OUTLIER_BH) mark(i, n, 'invalidOutlier');
+      if (dev != null && dev > (k.score >= OUTLIER_CONFIDENT_SCORE ? OUTLIER_BH * OUTLIER_CONFIDENT_MULT : OUTLIER_BH)) mark(i, n, 'invalidOutlier');
     }
   }
 
@@ -243,6 +274,7 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
   // long ones). (A first version compared each bone with its own local median;
   // that marginally caught arm↔leg swaps and also fired on serve foreshortening.)
   const dropped = noDrops();
+  hopped.forEach((h, i) => { if (h) { dropped[i] = true; report.droppedFrames++; } });
   const meanLen = (i: number, bones: ReadonlyArray<readonly [string, string]>) => {
     const v: number[] = [];
     for (const [A, B] of bones) if (valid(i, A) && valid(i, B)) v.push(d(idx[i].get(A)!, idx[i].get(B)!));
