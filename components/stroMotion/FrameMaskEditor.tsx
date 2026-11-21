@@ -1,5 +1,6 @@
 'use client';
 
+import { objectSelectUnavailableNote } from '@/lib/stroMotionDraft/objectSelectNote';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Brush,
@@ -552,10 +553,7 @@ export default function FrameMaskEditor({
           // Say WHY (the worker's or the page's load error), so a failure on a phone can be told apart:
           // out of memory vs a missing file vs something else.
           const reason = (getLastWorkerEncodeError() || (await import('@/lib/stroMotionDraft/samRacket')).getLastSamError() || '').slice(0, 160);
-          setRacketNote(
-            'Object select unavailable — the segmenter could not load on this machine.'
-            + (reason ? ` Reason: ${reason}` : ''),
-          );
+          setRacketNote(objectSelectUnavailableNote(reason));
         }
       } catch (e) {
         console.warn('[samRacket] prepare failed:', e);
@@ -591,6 +589,14 @@ export default function FrameMaskEditor({
   useEffect(() => {
     if (brushMode !== 'racket' && releaseEditorSamWorker()) setRacketReady(false);
   }, [brushMode]);
+  // PHONE: leaving the browser with the Object tool open keeps that ~850 MB resident, and iOS then kills the page in the
+  // background ("The page restarted. Reason: killed by the phone while it was in the background"). Free it the moment the
+  // page is hidden; coming back, a tap on the video prepares it again.
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === 'hidden' && releaseEditorSamWorker()) setRacketReady(false); };
+    document.addEventListener('visibilitychange', onHide);
+    return () => document.removeEventListener('visibilitychange', onHide);
+  }, []);
 
   /**
    * Re-decode from a point list. The single path through which the racket mask
