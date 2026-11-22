@@ -3627,31 +3627,11 @@ function Home() {
       void import('@/lib/racketCocoDetect').then((m) => m.preloadRacketDetector());
       return;
     }
-    // PHONE + racket pass ON: no COCO-SSD at all (D-FINE in a worker replaces it; its tfjs/WebGL model is ~+430 MB that is never returned).
-    // This sits AFTER the desktop branch above and BEFORE the sequenced warm-up, which is unchanged for every other phone setup.
-    if (racketWorkerEnabled() && autoRacketEnabled(stroObjectType)) return;
-    // PHONE ONLY (docs/PHONE_REFRESH_AFTER_AUTODETECT.md §7): the COCO-SSD warm-up compiles ~260
-    // WebGL programs on the main thread and holds a model Auto-detect does not use, so it starts
-    // AFTER the person-segmenter warm-up has had a head start and never while Auto-detect is
-    // running; "Preparing Motion Layer…" is on screen from the first frame. The racket tool and
-    // object tracking get the same detector, a few seconds later.
-    let cancelled = false;
-    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-    const clearPreparing = () => setProcessingStatus((cur) => (cur === PREPARING_MOTION_LAYER_TEXT ? null : cur));
-    setProcessingStatus((cur) => cur ?? PREPARING_MOTION_LAYER_TEXT);
-    recordStage('Motion Layer opened (warming models)');
-    void (async () => {
-      await sleep(1500);
-      while (!cancelled && stroAutoSelectBusyRef.current) await sleep(1000);
-      if (cancelled) return;
-      try {
-        recordStage('Motion Layer: loading the racket-tool detector');
-        const m = await import('@/lib/racketCocoDetect');
-        await m.preloadRacketDetector();
-      } catch { /* best-effort */ }
-      if (!cancelled) clearPreparing();
-    })();
-    return () => { cancelled = true; clearPreparing(); };
+    // PHONE: never warm COCO-SSD up when Motion Layer opens. Its tfjs/WebGL model is ~+430 MB that is never returned, and a real iPhone
+    // was killed by this exact warm-up ("Last step: Motion Layer: loading the racket-tool detector") before Auto-detect even started.
+    // The racket pass uses D-FINE/SAM in terminable workers instead. The legacy detector still loads on first USE (its callers import
+    // it lazily), so nothing is removed, it just is not paid for up front.
+    return;
   }, [stroMotionActive, stroMotionHtml5Only, stroObjectType]);
 
   /** Clear the Metrics/Snapshot analysis state (snapshots, data column, skeleton). */
