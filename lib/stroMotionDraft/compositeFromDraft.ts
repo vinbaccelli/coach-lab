@@ -112,6 +112,15 @@ export interface StroMotionDraftCompositeOptions {
 
 let behindScratch: HTMLCanvasElement | null = null;
 
+/**
+ * "Layers behind the player" is a GHOST TRAIL: the live player leaves faint copies of himself behind, and both stay readable.
+ * Hiding the layers completely wherever the live player stands (the first version) left only the racket and a hand visible, because a
+ * serve barely moves the torso. So the layers are drawn faint everywhere (BEHIND_GHOST_ALPHA) and a little of them still shows through
+ * the live player (BEHIND_THROUGH = share of the layer kept where the player is).
+ */
+export const BEHIND_GHOST_ALPHA = 0.5;
+export const BEHIND_THROUGH = 0.35;
+
 export function renderStroMotionDraftComposite(
   ctx: CanvasRenderingContext2D,
   draft: StroMotionDraft,
@@ -209,9 +218,13 @@ export function renderStroMotionDraftComposite(
       drawGhosts(gctx, { x: 0, y: 0, w: dest.w, h: dest.h });
       gctx.setTransform(1, 0, 0, 1, 0, 0);
       gctx.globalCompositeOperation = 'destination-out';
+      gctx.globalAlpha = 1 - BEHIND_THROUGH; // not fully erased under the live player: a faint copy still shows through him
       try { gctx.drawImage(behindMask, 0, 0, tw, th); } catch { /* no mask this frame: the ghosts stay in front */ }
+      gctx.globalAlpha = 1;
       gctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = BEHIND_GHOST_ALPHA;
       ctx.drawImage(ghostCanvas, dest.x, dest.y, dest.w, dest.h);
+      ctx.globalAlpha = 1;
     }
   } else {
     drawGhosts(ctx, dest);
