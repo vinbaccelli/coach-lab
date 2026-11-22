@@ -4466,7 +4466,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
 
         try {
-          recorder.start();
+          // The recorder starts only after step 0 is composited (below). Started here, it filmed whatever the canvas still showed (the
+          // preview's last picture: a second player at another zoom) as the video's first frame (real iPhone, 2026-11-22).
+          let recorderStarted = false;
 
           for (let step = 0; step <= totalSteps; step++) {
             const t = startTime + (step / totalSteps) * (endTime - startTime);
@@ -4516,6 +4518,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             if (step % 20 === 0) recordStage(`Motion Layer video: recording step ${step}/${totalSteps}`);
             await waitRender();
             await waitRender();
+            if (!recorderStarted) { recorder.start(); recorderStarted = true; }
             // Composite for this step is on the canvas — capture exactly one frame.
             emitFrame();
 
