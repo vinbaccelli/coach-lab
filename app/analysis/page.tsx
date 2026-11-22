@@ -3628,7 +3628,7 @@ function Home() {
       return;
     }
     // PHONE: never warm COCO-SSD up when Motion Layer opens. Its tfjs/WebGL model is ~+430 MB that is never returned, and a real iPhone
-    // was killed by this exact warm-up ("Last step: Motion Layer: loading the racket-tool detector") before Auto-detect even started.
+    // was killed by this warm-up (its restart notice named the racket-tool detector load as the last step) before Auto-detect even started.
     // The racket pass uses D-FINE/SAM in terminable workers instead. The legacy detector still loads on first USE (its callers import
     // it lazily), so nothing is removed, it just is not paid for up front.
     return;
