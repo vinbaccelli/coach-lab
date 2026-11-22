@@ -30,8 +30,8 @@ export function isFrameEncodedViaWorker(key: string): boolean {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** After a worker is terminated the phone needs a moment to take its memory back; a new SAM load started at once failed with "[wasm] RangeError: Out of memory" (real iPhone). */
-const SETTLE_MS = 1500;
-const LOAD_RETRIES = 3;
+const SETTLE_MS = 4000; // was 1500: still "Out of memory" on the second use after Generate (real iPhone 14 Pro, 2026-11-22)
+const LOAD_RETRIES = 4;
 let releasedAt = 0;
 
 /** Encode one frame in the worker. Returns null if SAM is unavailable; throws RacketWorkerUnavailable if the worker itself failed (caller falls back).
