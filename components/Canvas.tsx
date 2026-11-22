@@ -3976,6 +3976,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const video = videoRef.current;
         if (!video || video.videoWidth === 0) return null;
         try {
+          // PHONE: do NOT start the tfjs/WebGL MoveNet here. Its WebGL backend and model hold ~+400 MB that is never returned, and a real
+          // iPhone 14 Pro was killed at the first frame of Auto-detect ("object detection, frame 1/5") by exactly this load. The MediaPipe
+          // full landmarker is already loaded for the foot pass, gives the same COCO-17 layout with named feet, and is the more accurate
+          // model. A frame it finds nobody on returns null, as before (the batch commits a fallback box). Desktop is unchanged.
+          if (isPhoneBudgetActive()) {
+            const { detectFullPoseOnBitmap } = await import('@/lib/mediapipePose');
+            const bmpPhone = frame ?? await captureVideoFrameAtTime(video, timeSec);
+            try {
+              const kps = await detectFullPoseOnBitmap(bmpPhone, video.videoWidth, video.videoHeight);
+              return kps?.length ? kps.map((k) => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' })) : null;
+            } finally {
+              if (!frame) { try { bmpPhone.close?.(); } catch { /* ok */ } }
+            }
+          }
           const { acquirePoseDetector, markDetectStart, markDetectEnd } = await import('@/lib/sharedPoseDetector');
           const det = await acquirePoseDetector();
           const bmp = frame ?? await captureVideoFrameAtTime(video, timeSec);
