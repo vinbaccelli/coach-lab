@@ -35,9 +35,10 @@ test('the pass falls back to the in-page path when the worker fails, and termina
 
 test('phone + racket pass on: COCO-SSD is neither warmed at open nor used for the box hint (D-FINE worker replaces it); the existing sequencing is untouched', () => {
   const page = readFileSync(new URL('../app/analysis/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /if \(racketWorkerEnabled\(\) && autoRacketEnabled\(stroObjectType\)\) return;/);
+  // phones never warm COCO-SSD up at open any more (it loads on first use), whether or not the racket pass is on
+  assert.doesNotMatch(page, /Motion Layer: loading the racket-tool detector/);
   assert.match(page, /const skipCoco = racketWorkerEnabled\(\) && autoRacketEnabled\(stroObjectType\);/);
   assert.match(page, /if \(domWrist\?\.score >= 0\.2 && !skipCoco\)/);
-  // the desktop branch and the sequenced phone warm-up that tests/phoneStages.test.ts pins are still there
+  // the desktop branch is still there
   assert.match(page, /if \(!isPhoneBudgetActive\(\)\) \{\n\s+void import\('@\/lib\/racketCocoDetect'\)\.then\(\(m\) => m\.preloadRacketDetector\(\)\);\n\s+return;/);
 });

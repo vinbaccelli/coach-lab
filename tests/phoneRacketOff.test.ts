@@ -18,10 +18,10 @@ test('desktop: racket pass stays on in the implement modes and off in player/bal
   });
 });
 
-test('phone: racket pass is off by default in every mode', () => {
+test('phone: racket pass is on by default in the implement modes (workers), off in player, same as desktop', () => {
   withWindow({ __stroPhoneBudget: true }, () => {
-    assert.equal(autoRacketEnabled('racket'), false);
-    assert.equal(autoRacketEnabled('custom'), false);
+    assert.equal(autoRacketEnabled('racket'), true);
+    assert.equal(autoRacketEnabled('custom'), true);
     assert.equal(autoRacketEnabled('player'), false);
   });
 });

@@ -1,6 +1,5 @@
 'use client';
 
-import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 
 /**
  * FLAGS for AUTO-RACKET detection (D-FINE → SAM-2).
@@ -58,11 +57,9 @@ export function autoRacketEnabled(objectType: string): boolean {
   }
   if (stored === '1') return true;
   if (stored === '0') return false;
-  // PHONES: OFF unless asked for above. The racket pass loads D-FINE and SAM-2 (about +1 GB of
-  // wasm heap that is not returned) and the phone ends the page during it; the same clip
-  // finishes with the pass off (docs/PHONE_REFRESH_AFTER_AUTODETECT.md §8). Opt back in with
-  // localStorage 'autoRacket' = '1' or window.__autoRacket = true.
-  if (isPhoneBudgetActive()) return false;
+  // PHONES: ON like everywhere else. The pass runs D-FINE and SAM-2 in workers that are terminated after use (a fresh SAM worker per
+  // frame), and "racket detection stays" is the product rule. The safety net remains: a phone that is killed mid-pass stores
+  // autoRacket='0' and shows the notice, and ?racket=1 / ?racket=0 / localStorage still override.
   return IMPLEMENT_MODES.has(objectType);
 }
 
