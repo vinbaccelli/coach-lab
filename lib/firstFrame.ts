@@ -208,17 +208,44 @@ async function prime(
   await settlePaused(v, log, lastGestureAt);
 }
 
-/** Checks right after, shortly after and a second after the prime that the video really is paused. */
+/** How long after the prime a self-started play is still undone (a real iPhone started it late, after the first checks). */
+export const SETTLE_WATCH_MS = 6000;
+
+/**
+ * Checks right after the prime, and for SETTLE_WATCH_MS after it, that the video really is paused: on a timer, and on any 'play' the
+ * element fires (which the app also hears, so its timeline state agrees with the video afterwards). A play that follows a touch or
+ * key press is the coach's and is left alone.
+ */
 async function settlePaused(v: HTMLVideoElement, log: (s: string) => void, lastGestureAt: () => number): Promise<void> {
   const settleStartedAt = Date.now();
-  for (const ms of [0, 250, 1000]) {
-    if (ms) await wait(ms);
-    if (shouldForcePause({ paused: v.paused, lastGestureAt: lastGestureAt(), settleStartedAt })) {
-      try { v.pause(); } catch { /* noop */ }
-      try { v.dispatchEvent(new Event('pause')); } catch { /* noop */ }
-      log(`the video was still playing after the prime: paused (${ms} ms)`);
-    }
+  const undo = (why: string) => {
+    if (!shouldForcePause({ paused: v.paused, lastGestureAt: lastGestureAt(), settleStartedAt })) return;
+    try { v.pause(); } catch { /* noop */ }
+    try { v.dispatchEvent(new Event('pause')); } catch { /* noop */ }
+    log(`the video was still playing after the prime: paused (${why})`);
+  };
+  const onPlay = (e: Event) => { if (e.target === v) window.setTimeout(() => undo('play event'), 0); };
+  window.addEventListener('play', onPlay, true);
+  const stopAt = Date.now() + SETTLE_WATCH_MS;
+  // The first checks hold up the caller (as before); the rest of the watch runs on its own, so "frame decoded" is not delayed by it.
+  let waited = 0;
+  for (const ms of [0, 250, 750]) {
+    if (ms) { await wait(ms); waited += ms; }
+    undo(`${waited} ms`);
   }
+  void (async () => {
+    try {
+      for (const ms of [1500, 2000, 1500]) {
+        if (Date.now() >= stopAt) break;
+        await wait(ms); waited += ms;
+        undo(`${waited} ms`);
+      }
+      const left = stopAt - Date.now();
+      if (left > 0) await wait(left);
+    } finally {
+      window.removeEventListener('play', onPlay, true);
+    }
+  })();
 }
 
 /**
