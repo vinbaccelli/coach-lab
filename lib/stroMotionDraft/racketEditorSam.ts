@@ -8,6 +8,7 @@
  * caller falls back to the in-page SAM, exactly as before. Off phones (racketWorkerEnabled() false) this is never used.
  */
 import { RacketWorkerUnavailable, createRacketWorker, getLastWorkerEncodeError, racketWorkerEnabled, type RacketWorkerHandle } from '@/lib/stroMotionDraft/racketWorkerClient';
+import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 import type { SamDecodeResult, SamPoint } from '@/lib/stroMotionDraft/samRacket';
 
 let worker: RacketWorkerHandle | null = null;
@@ -73,4 +74,43 @@ export function releaseEditorSamWorker(): boolean {
   worker = null;
   encoded.clear();
   return had;
+}
+
+/**
+ * The frame editor is remounted for every frame (key={frame.index}), and its unmount used to release the worker, so
+ * moving to the next frame reloaded the whole model. Leaving the editor now releases it after a short grace period, and the next
+ * frame's editor mounting cancels that. Closing the editor for real (nothing mounts) still frees the memory, a moment later.
+ */
+export const EDITOR_LEAVE_GRACE_MS = 2500;
+let leaveTimer: ReturnType<typeof setTimeout> | null = null;
+export function cancelScheduledEditorRelease(): void {
+  if (leaveTimer !== null) { clearTimeout(leaveTimer); leaveTimer = null; }
+}
+export function releaseEditorSamWorkerOnLeave(): void {
+  cancelScheduledEditorRelease();
+  if (!keepSamAfterAdd()) { releaseEditorSamWorker(); return; }
+  leaveTimer = setTimeout(() => { leaveTimer = null; releaseEditorSamWorker(); }, EDITOR_LEAVE_GRACE_MS);
+}
+
+/**
+ * Keep the Object tool's model loaded after "Add to mask" (default), so the next frame or the next click does not wait for a reload.
+ * The model's memory is the same whichever frame it works on, so reloading per frame bought nothing. It was released there because a real
+ * iPhone was killed once at exactly that step; if that happens again (the restart notice names the step "Object select: adding the
+ * object"), this turns itself off on that phone and the old release-after-every-add behaviour returns.
+ */
+export const KEEP_SAM_AFTER_ADD_KEY = 'anglemotion:samKeepAfterAdd';
+export const ADD_OBJECT_STAGE = 'Object select: adding the object to the mask';
+// Real iPhone (Chrome, 2026-11-23): keeping the model through "Add to mask" got the page killed at exactly that step on the 2nd frame (the add
+// re-renders the draft while the ~850 MB worker is still resident). So a phone releases the model at Add by default (it passed all 5 frames that
+// way); desktop keeps it. localStorage '1' / '0' overrides either way.
+export function keepSamAfterAdd(): boolean {
+  try {
+    const v = window.localStorage.getItem(KEEP_SAM_AFTER_ADD_KEY);
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch { /* storage blocked: use the default */ }
+  return !isPhoneBudgetActive();
+}
+export function stopKeepingSamAfterAdd(): void {
+  try { window.localStorage.setItem(KEEP_SAM_AFTER_ADD_KEY, '0'); } catch { /* storage blocked */ }
 }
