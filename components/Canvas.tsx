@@ -44,6 +44,7 @@ import { renderStroMotionComposite, exportStroMotionVideo, pickStroVideoMime, ca
 import { recordStage } from '@/lib/restartBreadcrumb';
 import { buildMedianBackgroundPlate } from '@/lib/stroMotionDraft/backgroundPlate';
 import { createLiveOcclusion, type LiveOcclusionBuilder } from '@/lib/stroMotionDraft/liveOcclusionCanvas';
+import { createFixedFpsEncoder, exportSize } from '@/lib/stroMotionDraft/fixedFpsEncoder';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
 import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 import { PhoneFirstComposite } from '@/lib/stroMotionDraft/phoneFinalize';
@@ -4417,6 +4418,85 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
         // iOS: MP4 first (the Files app cannot open a WebM); elsewhere WebM first, as before. See pickStroVideoMime.
         const mimeType = pickStroVideoMime((t) => MediaRecorder.isTypeSupported(t), navigator.userAgent);
+
+        // PREFERRED PATH: each step is drawn on an off-screen canvas of the VIDEO's size (1080p at most) and encoded with an exact
+        // timestamp, so the file is 1080p and plays at the planned 24 fps. The recorder path below filmed the on-screen canvas (a phone's
+        // pane, 660x1332, black bars included) and stamped frames with real time (about 7 fps). It stays as the fallback: no WebCodecs, no
+        // encodable codec, or any failure here, and also when the ghost skeletons are on (they are only drawn by the on-screen render).
+        const ghostSkeletonsOn = !!(stroMotionShowSkeletonRef.current && stroMotionResultRef.current?.ghostPoses?.length);
+        if (!ghostSkeletonsOn) {
+          const fixed = await (async () => {
+            const size = exportSize(vw, vh);
+            const off = document.createElement('canvas');
+            off.width = size.w;
+            off.height = size.h;
+            const octx = off.getContext('2d');
+            if (!octx) return null;
+            const enc = await createFixedFpsEncoder(off, { fps });
+            if (!enc) return null;
+            recordStage(`Motion Layer video: preparing (${size.w}x${size.h}, ${fps} fps, ${enc.codec})`);
+            let occ: LiveOcclusionBuilder | null = null;
+            if (stroMotionLayersBehindRef.current) {
+              try {
+                const plate = await buildMedianBackgroundPlate(video, startTime, endTime);
+                if (plate) occ = createLiveOcclusion(plate);
+              } catch { occ = null; }
+            }
+            try {
+              const layerMode = stroMotionLayerModeRef.current ?? (videoOrder === 'reverse' ? 'vanish' : 'appear');
+              for (let step = 0; step <= totalSteps; step++) {
+                const clampedT = Math.min(startTime + (step / totalSteps) * (endTime - startTime), endTime);
+                let liveBitmap: ImageBitmap | null = null;
+                try { liveBitmap = await captureVideoFrameAtTime(video, clampedT); } catch { liveBitmap = null; }
+                let visibleStart = 0;
+                let visibleCount: number;
+                if (layerMode === 'all') {
+                  visibleCount = sampleTimes.length;
+                } else if (layerMode === 'vanish') {
+                  visibleStart = sampleTimes.filter((st) => st <= clampedT - 0.001).length;
+                  visibleCount = sampleTimes.length;
+                } else {
+                  visibleCount = sampleTimes.filter((st) => st <= clampedT + 0.001).length;
+                }
+                octx.setTransform(1, 0, 0, 1, 0, 0);
+                octx.clearRect(0, 0, size.w, size.h);
+                renderStroMotionDraftComposite(octx, draft, {
+                  visibleCount,
+                  visibleStart,
+                  previewMode: !stroMotionUseExportMasksRef.current,
+                  dest: { x: 0, y: 0, w: size.w, h: size.h },
+                  background: liveBitmap ? 'end' : 'start',
+                  videoOrder: stroMotionVideoOrderRef.current,
+                  endPlate: liveBitmap,
+                  overlayMode: false,
+                  behindMask: liveBitmap && occ ? occ.maskFor(liveBitmap) : null,
+                  ...(stroMotionGhostOpacityRef.current !== undefined
+                    ? { fadeMode: 'uniform' as const, opacity: stroMotionGhostOpacityRef.current }
+                    : {}),
+                });
+                if (watermarkModeRef.current !== 'off') {
+                  drawVideoWatermark(octx, size.w, size.h, { x: 0, y: 0, w: size.w, h: size.h, scale: watermarkModeRef.current === 'small' ? 0.55 : 1 });
+                }
+                if (liveBitmap) { try { liveBitmap.close(); } catch { /* ok */ } }
+                if (step % 20 === 0) recordStage(`Motion Layer video: encoding step ${step}/${totalSteps}`);
+                await enc.addFrame();
+                await new Promise((resolve) => setTimeout(resolve, 0)); // let the page breathe between steps
+              }
+              await enc.hold(finalHoldMs / 1000);
+              recordStage('Motion Layer video: finishing the file');
+              const blob = await enc.finish();
+              recordStage(`Motion Layer video: ready (${Math.round(blob.size / 1e6)} MB, ${size.w}x${size.h})`);
+              return { ok: true as const, blob, url: URL.createObjectURL(blob) };
+            } catch (e) {
+              console.warn('[StroMotion] fixed-fps export failed, using the recorder:', e);
+              await enc.cancel();
+              return null;
+            } finally {
+              occ?.dispose();
+            }
+          })();
+          if (fixed) return fixed;
+        }
 
         // Off-screen composite canvas (matches video resolution)
         const offCanvas = document.createElement('canvas');
