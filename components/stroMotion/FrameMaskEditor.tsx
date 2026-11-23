@@ -41,7 +41,9 @@ import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 import type { SamCandidate, SamPoint } from '@/lib/stroMotionDraft/samRacket';
 import { usePrecisionTouch } from '@/hooks/usePrecisionTouch';
 import { RacketWorkerUnavailable, getLastWorkerEncodeError } from '@/lib/stroMotionDraft/racketWorkerClient';
-import { releaseEditorSamWorker } from '@/lib/stroMotionDraft/racketEditorSam';
+import { ADD_OBJECT_STAGE, keepSamAfterAdd, releaseEditorSamWorker } from '@/lib/stroMotionDraft/racketEditorSam';
+import { unionMasks } from '@/lib/stroMotionDraft/maskUnion';
+import { recordStage } from '@/lib/restartBreadcrumb';
 import { ENABLE_MOTION_LAYER_PRECISION } from '@/lib/featureFlags';
 
 /**
@@ -608,7 +610,7 @@ export default function FrameMaskEditor({
    * disagree about what the mask should be.
    */
   const racketDecode = useCallback(
-    async (points: SamPoint[], forceCandidate?: number) => {
+    async (points: SamPoint[], forceCandidate?: number, keepMask?: AlphaMask | null) => {
       if (!racketKey) return;
       if (!points.some((p) => p.label === 1)) {
         setRacketMask(null);
@@ -635,7 +637,8 @@ export default function FrameMaskEditor({
           setRacketNote('No racket-shaped mask here — try clicking on the racket itself, or add another point.');
           return;
         }
-        setRacketMask(res.mask);
+        // A click that ADDS (keepMask given) never takes away what the earlier clicks had selected.
+        setRacketMask(keepMask ? unionMasks(keepMask, res.mask) : res.mask);
         setRacketCands(res.candidates);
         setRacketChosen(res.chosen);
         setRacketNote(null);
@@ -656,9 +659,9 @@ export default function FrameMaskEditor({
       const next = [...racketPoints, p];
       setRacketPoints(next);
       setRacketRedo([]); // a new click forks the history, as everywhere else
-      void racketDecode(next);
+      void racketDecode(next, undefined, negative ? null : racketMask);
     },
-    [racketPoints, racketDecode],
+    [racketPoints, racketDecode, racketMask],
   );
 
   const racketUndo = useCallback(() => {
@@ -704,7 +707,8 @@ export default function FrameMaskEditor({
     if (!racketMask) return;
     // Free the SAM worker BEFORE the mask is merged and the draft re-renders: the mask we need is already here, and a real iPhone was killed at
     // exactly this step with the worker still holding ~850 MB. Another click re-prepares it (the tool says so).
-    if (releaseEditorSamWorker()) setRacketReady(false);
+    recordStage(ADD_OBJECT_STAGE);
+    if (!keepSamAfterAdd() && releaseEditorSamWorker()) setRacketReady(false);
     void (async () => {
       const { unionRacketIntoMask } = await import('@/lib/stroMotionDraft/samRacket');
       pushUndo(cloneAlphaMask(maskRef.current));

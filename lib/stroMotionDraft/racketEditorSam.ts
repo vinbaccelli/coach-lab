@@ -74,3 +74,18 @@ export function releaseEditorSamWorker(): boolean {
   encoded.clear();
   return had;
 }
+
+/**
+ * Keep the Object tool's model loaded after "Add to mask" (default), so the next frame or the next click does not wait for a reload.
+ * The model's memory is the same whichever frame it works on, so reloading per frame bought nothing. It was released there because a real
+ * iPhone was killed once at exactly that step; if that happens again (the restart notice names the step "Object select: adding the
+ * object"), this turns itself off on that phone and the old release-after-every-add behaviour returns.
+ */
+export const KEEP_SAM_AFTER_ADD_KEY = 'anglemotion:samKeepAfterAdd';
+export const ADD_OBJECT_STAGE = 'Object select: adding the object to the mask';
+export function keepSamAfterAdd(): boolean {
+  try { return window.localStorage.getItem(KEEP_SAM_AFTER_ADD_KEY) !== '0'; } catch { return true; }
+}
+export function stopKeepingSamAfterAdd(): void {
+  try { window.localStorage.setItem(KEEP_SAM_AFTER_ADD_KEY, '0'); } catch { /* storage blocked */ }
+}

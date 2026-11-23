@@ -223,6 +223,7 @@ import type { Feature } from '@/lib/entitlements';
 import { autoRacketEnabled, setAutoRacketPreference } from '@/lib/stroMotionDraft/autoRacketFlags';
 import { consumeAutoDetectKilled, isPhoneBudgetActive, killedNotice, markAutoDetectFinished, markAutoDetectStarted } from '@/lib/stroMotionDraft/phoneBudget';
 import { currentNavType, installRestartBreadcrumb, recordStage } from '@/lib/restartBreadcrumb';
+import { ADD_OBJECT_STAGE, releaseEditorSamWorker, stopKeepingSamAfterAdd } from '@/lib/stroMotionDraft/racketEditorSam';
 import { racketWorkerEnabled } from '@/lib/stroMotionDraft/racketWorkerClient';
 import { FIRST_LAYERS_DRAWN_EVENT, OPENING_EDITOR_EVENT, OPENING_EDITOR_FAILSAFE_MS, OPENING_EDITOR_TEXT } from '@/lib/stroMotionDraft/phoneFinalize';
 import UpgradeSheet from '@/components/UpgradeSheet';
@@ -3401,6 +3402,8 @@ function Home() {
       setProcessingStatus(`Mark every frame Ready with a visible mask before generating (${stroReadyCount}/${stroMotionDraft?.frames.length ?? 0} ready).`);
       return;
     }
+    // Generate renders a lot at once: hand the Object tool's model (~850 MB on a phone) back first. The editor reloads it if it is used again.
+    releaseEditorSamWorker();
     setStroVisibleCount(undefined);
     canvasRef.current?.setStroMotionVisibleCount?.(undefined);
     setStroMotionPreviewHash(null);
@@ -4696,7 +4699,11 @@ function Home() {
     let storage: Storage | null = null;
     try { storage = window.sessionStorage; } catch { /* blocked */ }
     const trail = installRestartBreadcrumb({ win: window, doc: document, storage, navType: currentNavType() });
-    if (trail.verdict) setRestartNotice(trail.verdict.text);
+    if (trail.verdict) {
+      setRestartNotice(trail.verdict.text);
+      // Killed while adding an Object-select result to the mask: from now on this phone frees the model after every add (the old, safer behaviour).
+      if (trail.verdict.reason === 'killed' && trail.verdict.text.includes(ADD_OBJECT_STAGE)) stopKeepingSamAfterAdd();
+    }
     return trail.dispose;
   }, []);
 
