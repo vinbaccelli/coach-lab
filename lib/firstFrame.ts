@@ -224,8 +224,11 @@ async function settlePaused(v: HTMLVideoElement, log: (s: string) => void, lastG
     try { v.dispatchEvent(new Event('pause')); } catch { /* noop */ }
     log(`the video was still playing after the prime: paused (${why})`);
   };
-  const onPlay = (e: Event) => { if (e.target === v) window.setTimeout(() => undo('play event'), 0); };
-  window.addEventListener('play', onPlay, true);
+  // Hold the window itself: the watch below outlives this call, and must not depend on a global that can be gone by then.
+  const win = window;
+  const sleep = (ms: number) => new Promise<void>((r) => win.setTimeout(r, ms));
+  const onPlay = (e: Event) => { if (e.target === v) win.setTimeout(() => undo('play event'), 0); };
+  win.addEventListener('play', onPlay, true);
   const stopAt = Date.now() + SETTLE_WATCH_MS;
   // The first checks hold up the caller (as before); the rest of the watch runs on its own, so "frame decoded" is not delayed by it.
   let waited = 0;
@@ -237,13 +240,13 @@ async function settlePaused(v: HTMLVideoElement, log: (s: string) => void, lastG
     try {
       for (const ms of [1500, 2000, 1500]) {
         if (Date.now() >= stopAt) break;
-        await wait(ms); waited += ms;
+        await sleep(ms); waited += ms;
         undo(`${waited} ms`);
       }
       const left = stopAt - Date.now();
-      if (left > 0) await wait(left);
+      if (left > 0) await sleep(left);
     } finally {
-      window.removeEventListener('play', onPlay, true);
+      win.removeEventListener('play', onPlay, true);
     }
   })();
 }
