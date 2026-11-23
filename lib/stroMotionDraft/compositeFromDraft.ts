@@ -118,8 +118,10 @@ let behindScratch: HTMLCanvasElement | null = null;
  * serve barely moves the torso. So the layers are drawn faint everywhere (BEHIND_GHOST_ALPHA) and a little of them still shows through
  * the live player (BEHIND_THROUGH = share of the layer kept where the player is).
  */
-export const BEHIND_GHOST_ALPHA = 0.5;
-export const BEHIND_THROUGH = 0.35;
+/** Strength of the layers in "Auto" transparency. A coach-chosen 40/60/80% is used as chosen (multiplier 1): it used to be halved again, so the chips seemed to do nothing. */
+export const BEHIND_GHOST_ALPHA = 0.75;
+/** Share of a layer still visible through the live player (a serve barely moves the torso: at 0.35 almost nothing of the earlier bodies showed). */
+export const BEHIND_THROUGH = 0.5;
 
 export function renderStroMotionDraftComposite(
   ctx: CanvasRenderingContext2D,
@@ -222,7 +224,7 @@ export function renderStroMotionDraftComposite(
       try { gctx.drawImage(behindMask, 0, 0, tw, th); } catch { /* no mask this frame: the ghosts stay in front */ }
       gctx.globalAlpha = 1;
       gctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha = BEHIND_GHOST_ALPHA;
+      ctx.globalAlpha = fadeMode === 'uniform' ? 1 : BEHIND_GHOST_ALPHA;
       ctx.drawImage(ghostCanvas, dest.x, dest.y, dest.w, dest.h);
       ctx.globalAlpha = 1;
     }
