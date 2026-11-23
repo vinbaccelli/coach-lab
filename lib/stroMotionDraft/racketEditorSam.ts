@@ -8,6 +8,7 @@
  * caller falls back to the in-page SAM, exactly as before. Off phones (racketWorkerEnabled() false) this is never used.
  */
 import { RacketWorkerUnavailable, createRacketWorker, getLastWorkerEncodeError, racketWorkerEnabled, type RacketWorkerHandle } from '@/lib/stroMotionDraft/racketWorkerClient';
+import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 import type { SamDecodeResult, SamPoint } from '@/lib/stroMotionDraft/samRacket';
 
 let worker: RacketWorkerHandle | null = null;
@@ -99,8 +100,16 @@ export function releaseEditorSamWorkerOnLeave(): void {
  */
 export const KEEP_SAM_AFTER_ADD_KEY = 'anglemotion:samKeepAfterAdd';
 export const ADD_OBJECT_STAGE = 'Object select: adding the object to the mask';
+// Real iPhone (Chrome, 2026-11-23): keeping the model through "Add to mask" got the page killed at exactly that step on the 2nd frame (the add
+// re-renders the draft while the ~850 MB worker is still resident). So a phone releases the model at Add by default (it passed all 5 frames that
+// way); desktop keeps it. localStorage '1' / '0' overrides either way.
 export function keepSamAfterAdd(): boolean {
-  try { return window.localStorage.getItem(KEEP_SAM_AFTER_ADD_KEY) !== '0'; } catch { return true; }
+  try {
+    const v = window.localStorage.getItem(KEEP_SAM_AFTER_ADD_KEY);
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch { /* storage blocked: use the default */ }
+  return !isPhoneBudgetActive();
 }
 export function stopKeepingSamAfterAdd(): void {
   try { window.localStorage.setItem(KEEP_SAM_AFTER_ADD_KEY, '0'); } catch { /* storage blocked */ }
