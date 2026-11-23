@@ -1,0 +1,21 @@
+<!doctype html><meta charset=utf-8><title>spike</title><video id=v muted playsinline preload=auto src="/clip.webm"></video><canvas id=c></canvas>
+<script>
+window.__stroPhoneBudget = true;
+const v = document.getElementById('v'), c = document.getElementById('c');
+let worker = null, nid = 1; const pend = new Map(); window.frames = {};
+function call(msg, tr) { return new Promise((res, rej) => { const id = nid++; pend.set(id, [res, rej]); worker.postMessage({ ...msg, id }, tr || []); }); }
+window.startWorker = async (model, dtype) => {
+  worker = new Worker('/worker.js', { type: 'module' });
+  worker.onmessage = (e) => { const p = pend.get(e.data.id); if (!p) return; pend.delete(e.data.id); e.data.ok ? p[0](e.data) : p[1](new Error(e.data.error)); };
+  await call({ type: 'init', model, phone: true, squash: !!window.__squash }); const r = await call({ type: 'load', dtype }); return r.ms;
+};
+window.killWorker = () => { worker && worker.terminate(); worker = null; };
+window.ready = async () => { if (v.readyState < 1) await new Promise(r => v.onloadedmetadata = r); return { dur: v.duration, w: v.videoWidth, h: v.videoHeight }; };
+window.grab = async (t) => { v.currentTime = t; await new Promise(r => { v.onseeked = r; }); const W = v.videoWidth, H = v.videoHeight; c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(v, 0, 0); window.frames[t] = g.getImageData(0, 0, W, H); return { W, H }; };
+window.jpg = (t) => { const f = frames[t]; c.width = f.width; c.height = f.height; c.getContext('2d').putImageData(f, 0, 0); return c.toDataURL('image/jpeg', 0.9); };
+window.detect = async (t) => { const f = frames[t]; const r = await call({ type: 'detect', rgba: f.data.buffer.slice(0), W: f.width, H: f.height }); return r.hits; };
+window.encode = async (t) => { const f = frames[t]; const r = await call({ type: 'encode', rgba: f.data.buffer.slice(0), W: f.width, H: f.height }); return r.ms; };
+function b64(bin) { const n = Math.ceil(bin.length / 8), o = new Uint8Array(n); for (let i = 0; i < bin.length; i++) if (bin[i]) o[i >> 3] |= 1 << (i & 7); let s = ''; for (let i = 0; i < n; i += 8192) s += String.fromCharCode.apply(null, o.subarray(i, i + 8192)); return btoa(s); }
+window.decode = async (box, mode) => { const r = await call({ type: 'decode', box, mode }); return { ms: r.ms, chosen: r.chosen, cands: r.cands, mw: r.mw, mh: r.mh, bits: r.bin ? b64(r.bin) : null }; };
+window.drop = () => call({ type: 'drop' });
+</script>
