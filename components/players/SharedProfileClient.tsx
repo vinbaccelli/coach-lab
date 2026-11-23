@@ -14,10 +14,12 @@ import HistoryFeed, { type HistoryPage } from '@/components/players/history/Hist
 import { HISTORY_SECTIONS } from '@/lib/players/history';
 import { playerNutritionClient } from '@/components/players/nutrition/nutritionClient';
 import { sharedTabIds } from '@/lib/players/shareTabs';
+import BlueprintTab from '@/components/players/BlueprintTab';
+import type { PlayerBlueprint } from '@/lib/players/blueprint';
 import ProfileTabs, { DEFAULT_PROFILE_TAB, PROFILE_TABS, isProfileTab, type ProfileTab } from '@/components/players/ProfileTabs';
 
 type Item = { id: string; kind: 'note' | 'picture' | 'video'; body: string; media_url: string | null; youtube_id: string | null; created_at: string; author: 'coach' | 'link' };
-type Data = { name: string; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null; trackers?: Tracker[]; trackerEntries?: TrackerEntry[]; trackersAvailable?: boolean; permissions?: SharePermissions };
+type Data = { name: string; blueprint?: PlayerBlueprint | null; sheet: Array<{ label: string; value: string; kind?: 'track'; entries?: Array<{ id: string; date: string; text: string }> }>; items: Item[]; metrics: MetricRow[]; canAdd: boolean; timelineOrder?: string[] | null; trackers?: Tracker[]; trackerEntries?: TrackerEntry[]; trackersAvailable?: boolean; permissions?: SharePermissions };
 
 const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--cl-border)', background: 'var(--cl-bg-panel)', color: 'var(--cl-text-primary)', fontSize: 16, minWidth: 0 };
 const btn: React.CSSProperties = { padding: '8px 14px', borderRadius: 10, border: 'none', background: 'var(--cl-accent)', color: 'var(--cl-text-on-fill)', fontWeight: 700, fontSize: 12, cursor: 'pointer' };
@@ -132,7 +134,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
   const perms = data.permissions;
   const hasTrackers = (cat: string) => (data.trackers ?? []).some((t) => t.category === cat);
   const mayAdd = (k: 'progress' | 'biometrics' | 'fitness') => Boolean(data.canAdd && (can?.[k] ?? true));
-  const availTabs: ProfileTab[] = sharedTabIds(perms?.see);
+  const availTabs: ProfileTab[] = sharedTabIds(perms?.see, { blueprint: data.blueprint != null });
   // A permitted tab with nothing in it yet says so, instead of the tab silently not existing.
   const emptyTab: Partial<Record<ProfileTab, boolean>> = {
     technical: data.sheet.length === 0,
@@ -179,6 +181,8 @@ export default function SharedProfileClient({ token }: { token: string }) {
           <p style={{ margin: 0, fontSize: 13, color: 'var(--cl-text-secondary)' }}>Nothing here yet. Your coach has not added anything to this section.</p>
         </div>
       ) : null}
+
+      {activeTab === 'blueprint' && data.blueprint ? <BlueprintTab blueprint={data.blueprint} onChange={() => { /* read-only on the link */ }} canEdit={false} /> : null}
 
       {activeTab === 'technical' && data.sheet.length > 0 ? (
         <div style={panel}>

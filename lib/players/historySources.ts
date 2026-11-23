@@ -110,10 +110,12 @@ export async function loadHistory(client: SupabaseClient, o: HistoryOptions): Pr
     jobs.push(byCreated(() => db.from('player_entries').select('id,category,folder_label,body_text,screenshots,created_at').eq('player_id', o.playerId), f, c, L)
       .then((r) => take(r, itemFromReport)));
   }
-  // The change log (Blueprint updates…): the coach's only, in the section it belongs to.
-  if (o.viewer === 'coach' && !coachOnly && (!f.types || f.types.includes('change'))) {
-    jobs.push(byCreated(() => db.from('player_changes').select('id,section,title,body,created_at').eq('player_id', o.playerId), f, c, L)
-      .then((r) => take(r, itemFromChange)));
+  // The change log (Blueprint updates…), in the section it belongs to. A share link sees the entries of the sections it may see.
+  if (!coachOnly && (!f.types || f.types.includes('change'))) {
+    jobs.push(byCreated(() => {
+      const q = db.from('player_changes').select('id,section,title,body,created_at').eq('player_id', o.playerId);
+      return o.viewer === 'link' && o.sections ? q.in('section', o.sections) : q;
+    }, f, c, L).then((r) => take(r, itemFromChange)));
   }
   // Dated technical comments (Forehand, Backhand…), from the player's sheet.
   if (!coachOnly && want('technical', 'technical')) {
