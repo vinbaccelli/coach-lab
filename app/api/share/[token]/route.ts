@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { validateNewItem } from '@/lib/players/timeline';
 import { validateMetricInput } from '@/lib/players/metrics';
 import { parseTechnicalSheet } from '@/lib/players/technicalSheet';
+import { sanitizeBlueprint } from '@/lib/players/blueprint';
 import { loadShareTrackers, addValueAsTrackerEntry } from '@/lib/players/shareTrackers';
 
 export const runtime = 'nodejs';
@@ -42,6 +43,12 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   const ord = await db.from('players').select('timeline_order').eq('id', share.player_id).maybeSingle<{ timeline_order: unknown }>();
   const timelineOrder = ord.error ? null : parseOrder(ord.data?.timeline_order);
   const see = share.perms.see;
+  // The Blueprint (variants the coach chose), read-only, with the Technical section. The column is optional: a missing one never breaks the page.
+  let blueprint: ReturnType<typeof sanitizeBlueprint> | null = null;
+  if (see.technical) {
+    const bp = await db.from('players').select('blueprint').eq('id', share.player_id).maybeSingle<{ blueprint: unknown }>();
+    if (!bp.error && bp.data) blueprint = sanitizeBlueprint(bp.data.blueprint);
+  }
   const sheet = see.technical
     ? (parseTechnicalSheet(player.data.technical_sheet) ?? []).filter((r) => (r.kind === 'track' ? (r.entries?.length ?? 0) > 0 : r.value.trim() !== ''))
     : [];
@@ -52,7 +59,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ token: string }
   const visible = new Set(trackers.map((t) => t.id));
   return NextResponse.json(
     {
-      name: player.data.display_name, sheet, items: see.timeline ? items.data ?? [] : [], timelineOrder,
+      name: player.data.display_name, sheet, blueprint, items: see.timeline ? items.data ?? [] : [], timelineOrder,
       metrics: tr.available || !see.progress ? [] : metrics.data ?? [],
       trackers, trackerEntries: tr.entries.filter((e) => visible.has(e.tracker_id)), trackersAvailable: tr.available,
       permissions: share.perms,
