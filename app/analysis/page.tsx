@@ -4998,7 +4998,9 @@ function Home() {
     setDemoProgress(0);
     setDemoLoading(true);
     try {
-      const res = await fetch('/Demodjokovic.mp4');
+      // Phones get a ready-made 720p copy (their working size): the 1080p one would be re-encoded to 720p on every tap, which is the wait.
+      // Measured with the phone limits on: a 1080p working copy peaks 33% higher in page memory than 720p.
+      const res = await fetch(isPhoneBudgetActive() ? '/Demodjokovic-720p.mp4' : '/Demodjokovic.mp4');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       /*
