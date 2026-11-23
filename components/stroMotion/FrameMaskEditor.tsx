@@ -41,7 +41,7 @@ import type { StroMotionSubjectBox } from '@/lib/stroMotion';
 import type { SamCandidate, SamPoint } from '@/lib/stroMotionDraft/samRacket';
 import { usePrecisionTouch } from '@/hooks/usePrecisionTouch';
 import { RacketWorkerUnavailable, getLastWorkerEncodeError } from '@/lib/stroMotionDraft/racketWorkerClient';
-import { ADD_OBJECT_STAGE, keepSamAfterAdd, releaseEditorSamWorker } from '@/lib/stroMotionDraft/racketEditorSam';
+import { ADD_OBJECT_STAGE, cancelScheduledEditorRelease, keepSamAfterAdd, releaseEditorSamWorker, releaseEditorSamWorkerOnLeave } from '@/lib/stroMotionDraft/racketEditorSam';
 import { unionMasks } from '@/lib/stroMotionDraft/maskUnion';
 import { recordStage } from '@/lib/restartBreadcrumb';
 import { ENABLE_MOTION_LAYER_PRECISION } from '@/lib/featureFlags';
@@ -513,7 +513,10 @@ export default function FrameMaskEditor({
   }, [brushMode, racketNegative, zoom, sourceFrame, drawRacketReticle]);
 
   // Editor closed: terminate the Object tool's SAM worker so a phone gets all of its memory back (no-op when the page-side SAM was used).
-  useEffect(() => () => { releaseEditorSamWorker(); }, []);
+  useEffect(() => {
+    cancelScheduledEditorRelease(); // the next frame's editor mounted: keep the model it is about to use
+    return () => { releaseEditorSamWorkerOnLeave(); };
+  }, []);
 
   // Is this frame actually encoded? Without an embedding there is nothing to
   // prompt, so the tool reports that plainly instead of silently doing nothing.
@@ -592,8 +595,12 @@ export default function FrameMaskEditor({
   }, [brushMode, racketKey, sourceFrame, racketPrepNonce]);
 
   // PHONE: the Object tool's SAM worker holds ~+850 MB while it exists. Free it the moment the coach leaves the Object tool; coming back re-prepares (a few seconds).
+  // Only when the tool CHANGES away from Object select: a freshly mounted editor (the next frame) starts in another tool and must not drop the model.
+  const prevBrushModeRef = useRef<EditorTool>(brushMode);
   useEffect(() => {
-    if (brushMode !== 'racket' && releaseEditorSamWorker()) setRacketReady(false);
+    const was = prevBrushModeRef.current;
+    prevBrushModeRef.current = brushMode;
+    if (was === 'racket' && brushMode !== 'racket' && releaseEditorSamWorker()) setRacketReady(false);
   }, [brushMode]);
   // PHONE: leaving the browser with the Object tool open keeps that ~850 MB resident, and iOS then kills the page in the
   // background ("The page restarted. Reason: killed by the phone while it was in the background"). Free it the moment the

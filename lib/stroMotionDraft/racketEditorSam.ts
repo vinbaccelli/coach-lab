@@ -76,6 +76,22 @@ export function releaseEditorSamWorker(): boolean {
 }
 
 /**
+ * The frame editor is remounted for every frame (key={frame.index}), and its unmount used to release the worker, so
+ * moving to the next frame reloaded the whole model. Leaving the editor now releases it after a short grace period, and the next
+ * frame's editor mounting cancels that. Closing the editor for real (nothing mounts) still frees the memory, a moment later.
+ */
+export const EDITOR_LEAVE_GRACE_MS = 2500;
+let leaveTimer: ReturnType<typeof setTimeout> | null = null;
+export function cancelScheduledEditorRelease(): void {
+  if (leaveTimer !== null) { clearTimeout(leaveTimer); leaveTimer = null; }
+}
+export function releaseEditorSamWorkerOnLeave(): void {
+  cancelScheduledEditorRelease();
+  if (!keepSamAfterAdd()) { releaseEditorSamWorker(); return; }
+  leaveTimer = setTimeout(() => { leaveTimer = null; releaseEditorSamWorker(); }, EDITOR_LEAVE_GRACE_MS);
+}
+
+/**
  * Keep the Object tool's model loaded after "Add to mask" (default), so the next frame or the next click does not wait for a reload.
  * The model's memory is the same whichever frame it works on, so reloading per frame bought nothing. It was released there because a real
  * iPhone was killed once at exactly that step; if that happens again (the restart notice names the step "Object select: adding the
