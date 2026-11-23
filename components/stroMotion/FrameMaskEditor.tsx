@@ -149,6 +149,8 @@ export default function FrameMaskEditor({
   const containerRef = useRef<HTMLDivElement>(null);
   const [brushMode, setBrushMode] = useState<EditorTool>('add');
   const [brushSize, setBrushSize] = useState(18);
+  const brushSizeRef = useRef(brushSize);
+  brushSizeRef.current = brushSize;
   /**
    * Flood colour tolerance, shared by both flood buttons.
    *
@@ -395,7 +397,7 @@ export default function FrameMaskEditor({
     if (!precisionAvailable || !precisionOn) return;
     drawPrecisionCrosshair();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [precisionAvailable, precisionOn, zoom, pan.x, pan.y]);
+  }, [precisionAvailable, precisionOn, zoom, pan.x, pan.y, brushSize]);
 
   /**
    * Precision only means something for the paint brushes. Leaving them (to the
@@ -421,6 +423,9 @@ export default function FrameMaskEditor({
     const y = (client.y - rect.top) * k;
     const s = Math.max(3, 18 * k);
     const gap = s * 0.32;
+    // The ring is the BRUSH itself: its radius is the brush radius in screen px (what applyBrushToMask uses), so the coach sees exactly the
+    // area that will be added or removed. The crosshair marks its centre.
+    const brushR = Math.max(2, brushSizeRef.current * k);
     ctx.save();
     ctx.lineCap = 'round';
     for (const pass of [
@@ -436,7 +441,7 @@ export default function FrameMaskEditor({
       ctx.moveTo(x, y + gap); ctx.lineTo(x, y + s);
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(x, y, s * 0.6, 0, Math.PI * 2);
+      ctx.arc(x, y, brushR, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.restore();
