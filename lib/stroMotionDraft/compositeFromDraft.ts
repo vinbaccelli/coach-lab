@@ -103,7 +103,25 @@ export interface StroMotionDraftCompositeOptions {
    * directly over whatever is already on ctx (e.g. the live video frame).
    */
   overlayMode?: boolean;
+  /**
+   * "Layers behind the player": a canvas whose alpha marks the LIVE player (liveOcclusion.ts). The ghost layers are
+   * drawn on their own and cleared where this mask is set, so they sit behind the live player instead of over it.
+   */
+  behindMask?: CanvasImageSource | null;
 }
+
+let behindScratch: HTMLCanvasElement | null = null;
+
+/**
+ * "Layers behind the player" is a GHOST TRAIL: the live player leaves faint copies of himself behind, and both stay readable.
+ * Hiding the layers completely wherever the live player stands (the first version) left only the racket and a hand visible, because a
+ * serve barely moves the torso. So the layers are drawn faint everywhere (BEHIND_GHOST_ALPHA) and a little of them still shows through
+ * the live player (BEHIND_THROUGH = share of the layer kept where the player is).
+ */
+/** Strength of the layers in "Auto" transparency. A coach-chosen 40/60/80% is used as chosen (multiplier 1): it used to be halved again, so the chips seemed to do nothing. */
+export const BEHIND_GHOST_ALPHA = 0.75;
+/** Share of a layer still visible through the live player (a serve barely moves the torso: at 0.35 almost nothing of the earlier bodies showed). */
+export const BEHIND_THROUGH = 0.5;
 
 export function renderStroMotionDraftComposite(
   ctx: CanvasRenderingContext2D,
@@ -122,12 +140,15 @@ export function renderStroMotionDraftComposite(
     videoOrder = 'forward',
     endPlate = null,
     overlayMode = false,
+    behindMask = null,
   } = options;
 
   const pickMask = resolveMask
     ?? ((frame: StroMotionFrameDraft) => (previewMode ? getPreviewMask(frame) : getExportMask(frame)));
 
-  const allFrames = draft.frames;
+  // TIME ORDER, not frame number: the coach can drag a frame stop past another, and Generate numbers
+  // and stacks the frames in the order they have in time when it runs. (Already in time order = identical to before.)
+  const allFrames = [...draft.frames].sort((a, b) => a.timeSec - b.timeSec);
   const count = Math.min(visibleCount, allFrames.length);
   if (count <= 0) return;
   const total = allFrames.length;
@@ -165,20 +186,50 @@ export function renderStroMotionDraftComposite(
    */
   const slice = orderedFrames.slice(startIdx, count);
   const currentFrame = slice.length ? slice[slice.length - 1] : null;
-  const painted = [...slice].sort((a, b) => a.index - b.index);
+  const painted = [...slice].sort((a, b) => a.timeSec - b.timeSec);
 
-  for (const frame of painted) {
-    const mask = pickMask(frame);
-    if (!frame.sourceFrame || !mask) continue;
+  const drawGhosts = (target: CanvasRenderingContext2D, to: { x: number; y: number; w: number; h: number }) => {
+    for (const frame of painted) {
+      const mask = pickMask(frame);
+      if (!frame.sourceFrame || !mask) continue;
 
-    const isCurrent = frame === currentFrame;
-    const ghostAlpha = isCurrent
-      ? 1.0
-      : fadeMode === 'temporal'
-        ? temporalGhostOpacity(frame.index, total)
-        : opacity;
+      const isCurrent = frame === currentFrame;
+      const ghostAlpha = isCurrent
+        ? 1.0
+        : fadeMode === 'temporal'
+          ? temporalGhostOpacity(frame.index, total)
+          : opacity;
 
-    renderMaskedFrame(ctx, frame.sourceFrame, mask, dest, ghostAlpha, scratch);
+      renderMaskedFrame(target, frame.sourceFrame, mask, to, ghostAlpha, scratch);
+    }
+  };
+
+  if (behindMask) {
+    // The ghosts on their own canvas (at the current zoom's pixel density), cleared where the live player is, then laid over the live frame.
+    const k = Math.max(0.1, ctx.getTransform().a || 1);
+    const tw = Math.max(1, Math.round(dest.w * k));
+    const th = Math.max(1, Math.round(dest.h * k));
+    const ghostCanvas = behindScratch ?? (behindScratch = document.createElement('canvas'));
+    if (ghostCanvas.width !== tw) ghostCanvas.width = tw;
+    if (ghostCanvas.height !== th) ghostCanvas.height = th;
+    const gctx = ghostCanvas.getContext('2d');
+    if (gctx) {
+      gctx.setTransform(1, 0, 0, 1, 0, 0);
+      gctx.clearRect(0, 0, tw, th);
+      gctx.setTransform(k, 0, 0, k, 0, 0);
+      drawGhosts(gctx, { x: 0, y: 0, w: dest.w, h: dest.h });
+      gctx.setTransform(1, 0, 0, 1, 0, 0);
+      gctx.globalCompositeOperation = 'destination-out';
+      gctx.globalAlpha = 1 - BEHIND_THROUGH; // not fully erased under the live player: a faint copy still shows through him
+      try { gctx.drawImage(behindMask, 0, 0, tw, th); } catch { /* no mask this frame: the ghosts stay in front */ }
+      gctx.globalAlpha = 1;
+      gctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = fadeMode === 'uniform' ? 1 : BEHIND_GHOST_ALPHA;
+      ctx.drawImage(ghostCanvas, dest.x, dest.y, dest.w, dest.h);
+      ctx.globalAlpha = 1;
+    }
+  } else {
+    drawGhosts(ctx, dest);
   }
 
   ctx.restore();

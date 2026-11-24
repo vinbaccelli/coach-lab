@@ -1,5 +1,7 @@
 'use client';
 
+import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+
 import type { AlphaMask } from '@/lib/stroMotionDraft/types';
 import {
   COVERED_MIN_ALPHA,
@@ -191,6 +193,23 @@ async function segmentCanvas(canvas: HTMLCanvasElement): Promise<CanvasImageSour
  * is how we can see from the console that the wiring actually fired, rather than
  * inferring it from a fast frame 1.
  */
+/**
+ * Phone memory budget: close the MediaPipe selfie solution (its wasm, its model and its
+ * WebGL contexts) when the mask pass ends. The next use initialises it again
+ * (about 3 s).
+ */
+export async function releaseSelfieSegmenter(): Promise<void> {
+  const pending = solutionPromise;
+  solutionPromise = null;
+  latestMask = null;
+  sendQueue = Promise.resolve();
+  try {
+    const solution = (await pending) as unknown as { close?: () => Promise<void> | void } | null;
+    await solution?.close?.();
+    console.log('[selfieSegmenter] solution released');
+  } catch { /* dropped either way */ }
+}
+
 export function preloadSelfieSegmenter(): void {
   if (typeof window === 'undefined') return;
   console.log(`[selfieSegmenter] PRELOAD requested — warming '${selectedSegmenter()}' ahead of the batch`);
@@ -299,6 +318,12 @@ async function segmentPersonLegacy(
   if (!readCtx) return null;
   readCtx.drawImage(maskSource, 0, 0);
   const rgba = readCtx.getImageData(0, 0, mw, mh).data;
+  // Phone memory budget: the solution hands back a fresh ImageBitmap per frame that
+  // nothing closes; we own it once it has been read.
+  if (isPhoneBudgetActive() && typeof ImageBitmap !== 'undefined' && maskSource instanceof ImageBitmap) {
+    try { maskSource.close(); } catch { /* already closed */ }
+    latestMask = null;
+  }
 
   // Person confidence is carried in the COLOUR channels ("person = white,
   // background = black" — the same reading lib/webcamSegmentation.ts relies on),

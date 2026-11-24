@@ -39,7 +39,7 @@ export const PLAYERS_TOUR: TourDef = {
     {
       id: 'profile',
       title: 'The profile',
-      body: 'Under the name: date of birth, nationality, playing hand and your notes on this player. Save profile keeps them.',
+      body: 'The photo, date of birth and your notes, plus any rows you add (rename or drag them). The tabs below hold the technical sheet, progress, biometrics, fitness and the timeline. Save profile keeps the top card.',
       target: 'player-profile',
       placement: 'bottom',
       advance: { kind: 'next' },

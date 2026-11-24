@@ -230,7 +230,7 @@ const ENTRIES: Entry[] = [
 const TUTORIAL_STEPS: Array<{ t: string; b: string; shot: Shot }> = [
   {
     t: 'Bring the video in',
-    b: 'Upload from your camera roll, pull from Google Drive, or paste a YouTube link. Nothing to install.',
+    b: 'Upload from your camera roll or pull from Google Drive. Nothing to install.',
     shot: { src: `${SHOT_DIR}/step-upload.webp`, width: 1920, height: 1328, alt: 'The empty workspace with Upload Video, the tennis-court strategy board and the demo clip.' },
   },
   {
@@ -740,7 +740,7 @@ const CSS = `
 .am-nav {
   position: sticky; top: 0; z-index: 50;
   display: flex; align-items: center; justify-content: space-between;
-  gap: 16px; padding: 14px var(--am-gutter);
+  gap: 16px; padding: calc(14px + env(safe-area-inset-top, 0px)) var(--am-gutter) 14px;
   background: rgba(255,255,255,0.88);
   backdrop-filter: saturate(1.6) blur(14px);
   border-bottom: 1px solid var(--cl-border-subtle);
