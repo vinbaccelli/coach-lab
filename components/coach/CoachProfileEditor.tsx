@@ -1,5 +1,7 @@
 'use client';
 
+import SubscriptionOfferEditor from './SubscriptionOfferEditor';
+import { EMPTY_SUBSCRIPTION_OFFER, sanitizeSubscriptionOffer, type SubscriptionOffer } from '@/lib/analysisPricing';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Plus, Trash2, ExternalLink, Save, Eye, Upload, GripVertical,
@@ -100,6 +102,9 @@ export default function CoachProfileEditor() {
   const [accentColor, setAccentColor] = useState('#007AFF');
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [links, setLinks] = useState<LinkItem[]>([]);
+  /* Analysis subscription. Sent on save only once the coach has touched it (see the API route). */
+  const [subscription, setSubscription] = useState<SubscriptionOffer>(EMPTY_SUBSCRIPTION_OFFER);
+  const [subscriptionTouched, setSubscriptionTouched] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -123,6 +128,7 @@ export default function CoachProfileEditor() {
           }
           setAvatarUrl(d.profile.avatar_url ?? '');
           setAccentColor(d.profile.accent_color ?? '#007AFF');
+          setSubscription(sanitizeSubscriptionOffer(d.profile.subscription_offer));
           setServices((d.services ?? []).map((s: any) => ({
             id: s.id, title: s.title, description: s.description ?? '',
             price: s.price ?? '', cta_label: s.cta_label ?? '', cta_url: s.cta_url ?? '',
@@ -199,6 +205,7 @@ export default function CoachProfileEditor() {
           profile: { slug, name, tagline, bio: serializeBioLines(bioLines), avatar_url: avatarUrl || null, accent_color: accentColor },
           services: services.map((s, i) => ({ ...s, sort_order: i })),
           links: links.map((l, i) => ({ ...l, sort_order: i })),
+          ...(subscriptionTouched ? { subscription } : {}),
         }),
       });
       if (res.ok) {
@@ -218,7 +225,7 @@ export default function CoachProfileEditor() {
     } finally {
       setSaving(false);
     }
-  }, [slug, name, tagline, bioLines, avatarUrl, accentColor, services, links]);
+  }, [slug, name, tagline, bioLines, avatarUrl, accentColor, services, links, subscription, subscriptionTouched]);
 
   const addBioLine = () => setBioLines(prev => (prev.length >= MAX_BIO_LINES ? prev : [...prev, '']));
   const removeBioLine = (index: number) => setBioLines(prev => prev.filter((_, i) => i !== index));
@@ -566,6 +573,15 @@ export default function CoachProfileEditor() {
         {services.length === 0 && (
           <p style={{ fontSize: 13, color: 'var(--cl-text-muted)', margin: 0 }}>No services yet. Add your coaching packages, session types, or analysis services.</p>
         )}
+      </div>
+
+      {/* Analysis subscription */}
+      <div style={sectionStyle}>
+        <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 700 }}>Video analysis subscription</h3>
+        <SubscriptionOfferEditor
+          value={subscription}
+          onChange={(next) => { setSubscription(next); setSubscriptionTouched(true); }}
+        />
       </div>
 
       {/* Links */}

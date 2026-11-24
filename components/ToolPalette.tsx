@@ -167,6 +167,8 @@ interface ToolPaletteProps {
   stroMotionPanel?: React.ReactNode;
   /** Called when the user navigates to a toolbar screen. */
   onNavigate?: (screen: 'home' | 'pan' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
+  /** The toolbar went BACK (Back button, or reset to home): the screen now shown. `onNavigate` only reports screens opened. */
+  onNavigateBack?: (screen: 'home' | 'pan' | 'recording' | 'style' | 'draw' | 'drawContext' | 'angle' | 'skeleton' | 'tools' | 'stromotion' | 'aimetrics' | 'webcam') => void;
   /**
    * Pan/Hand tool controls. The pan screen owns ALL viewport navigation —
    * zoom in, zoom out, the drag toggle and reset — so entering it is the one
@@ -199,7 +201,7 @@ interface ToolPaletteProps {
   /** Add a manual note to the data column */
   onAddNote?: () => void;
   /** Current measurement column items for display in toolbar */
-  measurementColumnItems?: Array<{ id: string; label: string; value: number; unit: string }>;
+  measurementColumnItems?: Array<{ id: string; label: string; value: number | null; unit: string }>;
   /** Delete a specific measurement by id */
   onDeleteMeasurement?: (id: string) => void;
   /** Quick screenshot → docs. When provided, shows a camera button in the footer. */
@@ -696,21 +698,44 @@ interface ToolbarChrome {
   onLockedFeature?: (feature: Feature) => void;
 }
 
+/**
+ * A phone held sideways is ~390 px tall. The footer (screenshot, undo, redo, clear, session, home,
+ * account) is pinned under the tool list, and as a single column of 44 px buttons it took the whole
+ * rail, leaving the tools above it unreachable. Short screens: the footer wraps into two columns
+ * and, if it is still tall, scrolls inside at most 45 % of the rail.
+ */
+function useShortViewport(): boolean {
+  const [short, setShort] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(max-height: 520px)');
+    const sync = () => setShort(mq.matches);
+    sync();
+    mq.addEventListener?.('change', sync);
+    return () => mq.removeEventListener?.('change', sync);
+  }, []);
+  return short;
+}
+
 function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
   const {
     mobileChrome, onScreenshotSave, screenshotSaving, denseMobile, io, rb,
     pressedKey, fire, iconBox, onUndo, onRedo, onClear, onCleanSession, authContent,
   } = chrome;
+  const short = useShortViewport();
   return (
     <div
       style={{
         flexShrink: 0,
+        ...(short
+          ? { display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignContent: 'flex-start', gap: 4, maxHeight: '45%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }
+          : null),
         paddingBottom: mobileChrome
           ? 'calc(4px + env(safe-area-inset-bottom, 0px) + var(--anglemotion-install-banner-height, 0px))'
           : undefined,
       }}
     >
-      <div style={{ height: 1, background: 'var(--cl-border)', margin: '8px 0' }} />
+      <div style={{ height: 1, background: 'var(--cl-border)', margin: '8px 0', ...(short ? { flexBasis: '100%' } : null) }} />
       {onScreenshotSave ? (
         <Row chrome={chrome}
           k="screenshot"
@@ -778,7 +803,7 @@ function GlobalActionsFooter({ chrome }: { chrome: ToolbarChrome }) {
         </span>
         {io ? null : <span style={{ fontSize: 13, fontWeight: 500 }}>Control Panel</span>}
       </Link>
-      {authContent ? <div style={{ marginTop: 4 }}>{authContent}</div> : null}
+      {authContent ? <div style={{ marginTop: 4, ...(short ? { flexBasis: '100%' } : null) }}>{authContent}</div> : null}
     </div>
   );
 }
@@ -799,6 +824,10 @@ function ToolbarLead({ chrome }: { chrome: ToolbarChrome }) {
         }
       </div>
       {!showCollapseControl && (compactToolbarChrome || mobileChrome || phoneLayout) && onToggleToolbarLabels ? (
+        // Expanded on a phone the close button stays pinned at the top while the toolbar scrolls.
+        <div style={compactToolbarChrome && toolbarLabelsExpanded
+          ? { position: 'sticky', top: 0, zIndex: 2, background: '#FFFFFF', paddingBottom: 4 }
+          : { display: 'contents' }}>
         <button
           type="button"
           aria-label={toolbarLabelsExpanded ? 'Collapse toolbar labels' : 'Expand toolbar labels'}
@@ -825,6 +854,7 @@ function ToolbarLead({ chrome }: { chrome: ToolbarChrome }) {
             <ToolbarChevron expanded={toolbarLabelsExpanded} />
           </span>
         </button>
+        </div>
       ) : null}
     </>
   );
@@ -1197,6 +1227,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     onToggleToolbarLabels,
     stroMotionPanel,
     onNavigate,
+    onNavigateBack,
     stroMotionEnabled = false,
     onStroMotionToggle,
     authContent,
@@ -1234,9 +1265,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   );
   const textMuted = 'var(--cl-text-secondary)';
   const textSubtle = 'var(--cl-text-muted)';
+  // Phone, labels expanded: the whole toolbar (tools AND the actions footer) is ONE
+  // scrolling column. With the footer pinned, a landscape phone's ~390 px gave the
+  // tool list zero height: the tools and the close button were squeezed out.
+  const phoneExpanded = Boolean(compactToolbarChrome && toolbarLabelsExpanded);
   const shellStyle: React.CSSProperties = {
     ...shell,
     ...(mobileChrome ? { flex: 1, minHeight: 0 } : null),
+    ...(phoneExpanded ? { overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' } : null),
     background: 'transparent',
     boxShadow: 'none',
     border: 'none',
@@ -1246,9 +1282,14 @@ export default function ToolPalette(props: ToolPaletteProps) {
   const top = navStack[navStack.length - 1];
   const { pressedKey, fire } = useTapScale();
 
+  const navStackRef = useRef(navStack);
+  navStackRef.current = navStack;
   const pop = useCallback(() => {
-    setNavStack((s) => (s.length > 1 ? s.slice(0, -1) : ['home']));
-  }, []);
+    const s = navStackRef.current;
+    const next: NavScreen[] = s.length > 1 ? s.slice(0, -1) : ['home'];
+    setNavStack(next);
+    onNavigateBack?.(next[next.length - 1]);
+  }, [onNavigateBack]);
   const push = useCallback((x: NavScreen) => {
     setNavStack((s) => [...s, x]);
     onNavigate?.(x);
@@ -1259,10 +1300,16 @@ export default function ToolPalette(props: ToolPaletteProps) {
     const el = document.createElement('style');
     el.id = id;
     el.textContent =
-      '@keyframes anglemotionToolbarScreenIn{from{opacity:.92;transform:translateX(8px)}to{opacity:1;transform:none}}';
+      '@keyframes anglemotionToolbarScreenIn{from{opacity:.92;transform:translateX(8px)}to{opacity:1;transform:none}}'
+      // Phone, labels expanded: the tool list keeps its full height inside the one scrolling shell.
+      // Phone, labels expanded: the tool list is flattened into the one scrolling shell
+      // (display:contents), so the pinned close button's sticky parent is the whole shell
+      // and it stays on screen while the actions footer scrolls by.
+      + '[data-phone-expanded]{gap:6px;padding:0 10px}'
+      + '[data-phone-expanded]>.anglemotion-toolbar-scroll{display:contents!important}';
     document.head.appendChild(el);
   }, []);
-  const resetNav = useCallback(() => setNavStack(['home']), []);
+  const resetNav = useCallback(() => { setNavStack(['home']); onNavigateBack?.('home'); }, [onNavigateBack]);
 
   useEffect(() => {
     if (!drawContextActive) {
@@ -1384,7 +1431,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'recording' && recordingHubContent) {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1405,7 +1452,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
     // so it needs its own resolution rather than reading off `styleVals`.
     const pulseVal = styleMode && styleSelection ? styleSelection.spinning : !!circleSpinning;
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1430,6 +1477,22 @@ export default function ToolPalette(props: ToolPaletteProps) {
               label={styleMode ? 'Style mode: ON' : 'Style mode'}
               onPress={onStyleModeToggle}
             />
+          )}
+          {/* Text tool: its size comes first, not below every other style option. */}
+          {activeTool === 'text' && !io && (
+            <div style={{ padding: '4px 8px 0' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', marginBottom: 4 }}>Text size</div>
+              <input
+                type="range"
+                min={10}
+                max={72}
+                step={2}
+                value={drawingOptions.fontSize}
+                onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })}
+                style={{ width: '100%' }}
+              />
+              <div style={{ fontSize: 12, color: textMuted, marginTop: 4 }}>{drawingOptions.fontSize}px</div>
+            </div>
           )}
           {!io ? (
           <>
@@ -1526,21 +1589,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
             )}
           {(activeTool === 'manualSwing' || activeTool === 'swingPath') &&
             chk('arrowEnd', 'Arrow at end of swing path', !!drawingOptions.arrowAtEnd, (v) => onOptionsChange({ arrowAtEnd: v }))}
-          {activeTool === 'text' && !io && (
-            <div style={{ padding: '4px 8px 0' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: textSubtle, textTransform: 'uppercase', marginBottom: 4 }}>Text size</div>
-              <input
-                type="range"
-                min={10}
-                max={72}
-                step={2}
-                value={drawingOptions.fontSize}
-                onChange={(e) => onOptionsChange({ fontSize: Number(e.target.value) })}
-                style={{ width: '100%' }}
-              />
-              <div style={{ fontSize: 12, color: textMuted, marginTop: 4 }}>{drawingOptions.fontSize}px</div>
-            </div>
-          )}
         </ToolbarScrollArea>
         <GlobalActionsFooter chrome={chrome} />
       </div>
@@ -1549,7 +1597,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'draw') {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1582,6 +1630,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
               push('style');
             }}
           />
+          <Row chrome={chrome} k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
           <Row chrome={chrome} k="pen" active={activeTool === 'pen'} icon={<Pen size={18} />} tooltip="Freehand drawing tool" label="Pen" onPress={() => setTool('pen')} />
           <Row chrome={chrome} k="line" active={activeTool === 'line'} icon={<Minus size={18} />} tooltip="Draw a straight line" label="Line" onPress={() => setTool('line')} />
           <Row chrome={chrome} k="arrow" active={activeTool === 'arrow'} icon={<ArrowRight size={18} />} tooltip="Draw an arrow with direction" label="Arrow" onPress={() => setTool('arrow')} />
@@ -1593,7 +1642,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
           <Row chrome={chrome} k="circle" active={activeTool === 'circle'} icon={<Circle size={18} />} tooltip="Draw a circle or ellipse" label="Circle" onPress={() => setTool('circle')} />
           <Row chrome={chrome} k="sw" active={activeTool === 'manualSwing'} icon={<SwingPathIcon size={18} />} tooltip="Trace the racket swing path" label="Swing path" onPress={() => setTool('manualSwing')} />
           <Row chrome={chrome} k="jc" active={activeTool === 'jointChain'} icon={<JointChainIcon size={18} />} tooltip="Connect joint points to measure body alignment" label="Joint chain" onPress={() => setTool('jointChain')} />
-          <Row chrome={chrome} k="text" active={activeTool === 'text'} icon={<Type size={18} />} tooltip="Add text annotation on the video" label="Text" onPress={() => setTool('text')} />
           {/*
             The outline eraser is a TOOL, not a Style checkbox. As a checkbox it
             lived in Style mode and had to switch off when Style ended (an armed
@@ -1690,7 +1738,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'angle') {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1705,7 +1753,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'skeleton') {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1816,7 +1864,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'tools') {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1837,7 +1885,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
      */
     const panDragArmed = activeTool === 'pan' && panDragEnabled;
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1908,7 +1956,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   if (top === 'stromotion') {
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -1941,7 +1989,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
   if (top === 'aimetrics') {
     const metricIcon = denseMobile || io ? 16 : 18;
     return (
-      <div style={shellStyle}>
+      <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
         <CollapseControl chrome={chrome} />
         <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
           <ToolbarLead chrome={chrome} />
@@ -2014,7 +2062,7 @@ export default function ToolPalette(props: ToolPaletteProps) {
 
   /* ── Home ─────────────────────────────────────────────────────────── */
   return (
-    <div style={shellStyle}>
+    <div style={shellStyle} data-phone-expanded={phoneExpanded || undefined}>
       <CollapseControl chrome={chrome} />
       <ToolbarScrollArea io={io} mobileChrome={mobileChrome}>
         <ToolbarLead chrome={chrome} />
@@ -2026,14 +2074,6 @@ export default function ToolPalette(props: ToolPaletteProps) {
           drag on the canvas then did nothing at all. Only the drag toggle
           inside the screen claims the tool now.
         */}
-        <Row chrome={chrome}
-          k="pan-h"
-          active={activeTool === 'pan'}
-          icon={<Hand size={denseMobile ? 16 : 18} />}
-          tooltip="Pan and zoom the video frame"
-          label="Pan / Zoom"
-          onPress={() => { onExitDrawContext?.(); push('pan'); }}
-        />
         <Row chrome={chrome}
           k="met-h"
           active={activeTool === 'skeleton'}

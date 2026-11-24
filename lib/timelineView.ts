@@ -335,3 +335,28 @@ export function rulerTicks(
   }
   return { step, minorStep, stepFrames: pick.frames, ticks, minorOffsetPx, minorPx };
 }
+
+/**
+ * Phone toolbar, labels expanded (app/analysis/page.tsx): how far above the rail's bottom
+ * the overlay must stop so it does not cover the timeline and its play controls. 0 when the
+ * timeline is not under the overlay's columns (or not found).
+ */
+export function overlayBottomInset(
+  rail: { left: number; bottom: number },
+  overlayWidth: number,
+  timeline: { left: number; right: number; top: number } | null,
+): number {
+  if (!timeline) return 0;
+  const overlaps = timeline.left < rail.left + overlayWidth && timeline.right > rail.left;
+  if (!overlaps || !(timeline.top < rail.bottom)) return 0;
+  return Math.max(0, Math.round(rail.bottom - timeline.top));
+}
+
+/**
+ * Phone: width of the toolbar overlay. Collapsed it is the rail itself; with labels expanded it opens at
+ * its own wider size. (It used to reuse the rail width in both states, so the expanded toolbar was a
+ * 60 px strip with its labels cut off.)
+ */
+export function railOverlayWidth(labelsExpanded: boolean, railW: number, expandedW: number): number {
+  return labelsExpanded ? Math.max(railW, expandedW) : railW;
+}

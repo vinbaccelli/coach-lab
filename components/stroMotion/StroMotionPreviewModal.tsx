@@ -48,6 +48,9 @@ export interface StroMotionPreviewModalProps {
   /** Ghost-layer timing for the exported video. */
   layerMode?: 'appear' | 'vanish' | 'all';
   onLayerModeChange?: (mode: 'appear' | 'vanish' | 'all') => void;
+  /** Exported video: layers behind the live player (true) or over it (false). */
+  layersBehind?: boolean;
+  onLayersBehindChange?: (on: boolean) => void;
   /** Final rendered video blob (for the YouTube upload step). */
   videoBlob?: Blob | null;
   /** Settings summary lines included in the Docs report. */
@@ -87,6 +90,8 @@ export default function StroMotionPreviewModal({
   onVideoSpeedChange,
   layerMode,
   onLayerModeChange,
+  layersBehind,
+  onLayersBehindChange,
   videoBlob,
   settingsLines,
 }: StroMotionPreviewModalProps) {
@@ -374,6 +379,18 @@ export default function StroMotionPreviewModal({
                     <button key={s} type="button" onClick={() => onVideoSpeedChange(s)}
                       style={{ ...chipBtn, ...(videoSpeed === s ? chipActive : {}) }}>
                       {s}×
+                    </button>
+                  ))}
+                </div>
+              )}
+              {onLayersBehindChange && (
+                <div style={settingGroup}>
+                  <span style={settingLabel}>Layers (video)</span>
+                  {([[true, 'Behind the player'], [false, 'In front']] as const).map(([v, label]) => (
+                    <button key={String(v)} type="button" onClick={() => onLayersBehindChange(v)}
+                      title={v ? 'Each layer stays where it was reached, and the live player moves over it (needs a still camera)' : 'Layers are drawn over the live video'}
+                      style={{ ...chipBtn, ...((layersBehind ?? false) === v ? chipActive : {}) }}>
+                      {label}
                     </button>
                   ))}
                 </div>

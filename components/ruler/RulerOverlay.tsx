@@ -267,12 +267,16 @@ export default function RulerOverlay({
 
   const isCalibrating = mode === 'calibrate' && calibStep === 'place-points' && !awaitingCustomLength;
   const isMeasuring = mode === 'measure';
+  // Once the type of calibration is chosen the panel shrinks to what is needed while pointing (no units row, no tips,
+  // no list of placed points, narrower), so it covers little of the video and need not be dragged out of the way.
+  const slim = calibStep !== 'pick-preset';
 
   // ── PRECISION TOUCH (ruler) ──────────────────────────────────────────────
   // Additive layer over the ruler's own SVG pointer pipeline. Entirely inert
   // when ENABLE_RULER_PRECISION is false — see lib/featureFlags.
   const [precisionOn, setPrecisionOn] = useState(false);
   const precision = usePrecisionTouch<Point2D>({
+    label: 'ruler',
     enabled: ENABLE_RULER_PRECISION,
     active: precisionOn,
     // The hook measures its offset from this element's height, and the ruler's
@@ -288,6 +292,7 @@ export default function RulerOverlay({
     // measuring. Idle ruler UI never arms a hold.
     isHoldEligible: () => isCalibrating || isMeasuring,
     onActivate: () => setPrecisionOn(true),
+    onDeactivate: () => setPrecisionOn(false),
     // Second finger commits at the crosshair, routed to whichever step is live.
     // Measuring is two taps: the first sets the start, the second finishes the
     // measurement through the very same handler a drag would have used.
@@ -581,7 +586,7 @@ export default function RulerOverlay({
         ...(panelPos
           ? { left: panelPos.x, top: panelPos.y, right: 'auto' as const }
           : { top: panelDefaultTop, right: compact ? 8 : 12 }),
-        width: compact ? 'min(236px, calc(100% - 16px))' : 280,
+        width: compact ? (slim ? 'min(196px, calc(100% - 16px))' : 'min(236px, calc(100% - 16px))') : (slim ? 232 : 280),
         // At the default anchor the panel must fit below its (possibly lowered)
         // top. A dragged panel keeps its original sizing, so dragging it down
         // never shrinks it under the drag clamp that measures its height.
@@ -660,6 +665,7 @@ export default function RulerOverlay({
           so flipping this re-renders every existing measurement instantly and
           never invalidates the scale.
         */}
+        {calibStep !== 'place-points' && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 6, padding: compact ? '5px 10px' : '7px 14px',
           borderBottom: '1px solid rgba(255,255,255,0.08)',
@@ -688,6 +694,7 @@ export default function RulerOverlay({
             ))}
           </div>
         </div>
+        )}
 
         {/* Body */}
         <div style={{ padding: compact ? '8px 10px' : '10px 14px' }}>
@@ -777,21 +784,8 @@ export default function RulerOverlay({
                       ))}
                     </select>
                   </div>
-                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 4, lineHeight: 1.4 }}>
-                    You can also type the unit inline — “27 in”, “1.8 m”, “5 ft 11 in”.
-                  </div>
-
-                  {/* Racket hint + one-tap prefill */}
-                  <div style={{
-                    marginTop: 8, padding: '7px 9px', borderRadius: 8,
-                    background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.25)',
-                  }}>
-                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', lineHeight: 1.45 }}>
-                      💡 <strong style={{ color: 'var(--cl-warning-text)' }}>Tip:</strong> a racket is an easy reference —
-                      it’s always in frame. Most adult rackets are{' '}
-                      <strong>{unitSystem === 'imperial' ? '27 in (68.6 cm)' : '68.6 cm (27 in)'}</strong>.
-                      Draw along the racket and use that length.
-                    </div>
+                  {/* One-tap prefill with a racket's length (the long tip text is gone: the panel is slim now) */}
+                  <div style={{ marginTop: 6 }}>
                     <button
                       onClick={() => {
                         const pre = racketPrefill(unitSystem);
@@ -800,7 +794,7 @@ export default function RulerOverlay({
                         setCalibError(null);
                       }}
                       style={{
-                        marginTop: 6, width: '100%', padding: '5px 0', borderRadius: 6, border: 'none',
+                        width: '100%', padding: '5px 0', borderRadius: 6, border: 'none',
                         cursor: 'pointer', background: 'rgba(245,158,11,0.85)', color: 'var(--cl-text-primary)',
                         fontWeight: 700, fontSize: 11,
                       }}>
@@ -872,8 +866,8 @@ export default function RulerOverlay({
                 )}
               </div>
 
-              {/* Placed points list */}
-              {calibPoints.map((_, i) => (
+              {/* Placed points list: only while the panel is not slim (it is slim here; the dots above show progress) */}
+              {!slim && calibPoints.map((_, i) => (
                 <div key={i} style={{
                   display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0',
                   color: 'rgba(255,255,255,0.5)', fontSize: 11,
@@ -982,6 +976,7 @@ export default function RulerOverlay({
         </div>
 
         {/* Footer tip */}
+        {!slim && (
         <div style={{
           padding: '6px 14px', borderTop: '1px solid rgba(255,255,255,0.06)',
           fontSize: 10, color: 'rgba(255,255,255,0.3)', lineHeight: 1.4,
@@ -990,6 +985,7 @@ export default function RulerOverlay({
           it’s in almost every clip and most adult rackets are 27 in (68.6 cm). "Service Box" gives
           perspective-corrected measurements.
         </div>
+        )}
       </div>
     </div>
   );

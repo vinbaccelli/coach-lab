@@ -1,17 +1,22 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { findReportForEntry } from '@/lib/reports/deriveBlocks';
 import { usePlayerReports } from '@/components/reports/usePlayerReports';
 import ReportBlocks from '@/components/reports/ReportBlocks';
+import EntryManager from '@/components/reports/EntryManager';
+import DownloadPdfButton from '@/components/reports/DownloadPdfButton';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 import PlayerNav, { PlayerNotFound } from '@/components/reports/PlayerNav';
 import { reportTitle } from '@/components/reports/ReportsIndexClient';
 import { backLink, chipStyle, FOCUS_CSS, formatDateKey, KIND_CHIP, mutedText, wrap } from '@/components/reports/reportStyles';
 
 export default function ReportViewClient({ playerId, entryId }: { playerId: string; entryId: string }) {
-  const { playerName, reports, loading, error, notFound, reload } = usePlayerReports(playerId);
+  const router = useRouter();
+  const { playerName, reports, entries, loading, error, notFound, reload } = usePlayerReports(playerId);
   const report = useMemo(() => findReportForEntry(reports, entryId), [reports, entryId]);
 
   // Arriving straight from "Saved to report": the row can lag the redirect by a beat, so look once more.
@@ -78,7 +83,19 @@ export default function ReportViewClient({ playerId, entryId }: { playerId: stri
           {report.opponent ? ` · vs ${report.opponent}` : ''}
         </p>
       </header>
+      {REPORTS_IN_APP ? (
+        <div style={{ margin: '-12px 0 24px' }}>
+          <DownloadPdfButton label="Download PDF" playerName={playerName} reports={[report]} filenameBase={`${playerName || 'player'} ${reportTitle(report)}`} />
+        </div>
+      ) : null}
       <ReportBlocks blocks={report.blocks} fallbackText={report.fallbackText} />
+      <EntryManager
+        playerId={playerId}
+        entries={entries.filter((e) => report.entryIds.includes(e.id))}
+        canAddNote={report.kind === 'technical'}
+        onChanged={() => void reload({ quiet: true })}
+        onLastRemoved={() => router.push(`/players/${playerId}/reports`)}
+      />
       <nav aria-label="Report navigation" style={{ marginTop: 40, paddingTop: 8, borderTop: '1px solid var(--cl-border-subtle)' }}>
         <Link href={`/players/${playerId}/reports`} style={backLink}>
           <ArrowLeft size={16} aria-hidden /> All reports
