@@ -98,7 +98,7 @@ export const vinbaccelli: CuratedCoachProfile = {
     { id: 'm-ncaa', label: 'NCAA Consulting', targetId: 'ncaa-consulting' },
     {
       id: 'm-bonus',
-      label: 'Get €10 Bonus to use on my services or eBook',
+      label: 'Leave me a review',
       targetId: 'review-bonus',
     },
     { id: 'm-about', label: 'About Me', targetId: 'about' },
@@ -117,7 +117,7 @@ export const vinbaccelli: CuratedCoachProfile = {
           id: 'quick-feedback',
           name: 'Quick Feedback',
           subtitle: 'Fundamentals Check',
-          detail: '1–2 min video · stroke ×5',
+          detail: '1–2 min video · stroke ×5 · 10–15 min analysis',
           ctaLabel: 'Book Quick Feedback',
           options: [
             { strokes: 1, price: '€20', url: 'https://buy.stripe.com/eVq7sLdgB7ve3QYbEi7kc03' },
@@ -131,7 +131,7 @@ export const vinbaccelli: CuratedCoachProfile = {
           id: 'in-depth',
           name: 'In-Depth Analysis',
           subtitle: 'Fundamentals + Variants',
-          detail: 'Up to 10 min video',
+          detail: 'Up to 10 min video · 30–45 min analysis',
           ctaLabel: 'Book In-Depth Analysis',
           options: [
             { strokes: 1, price: '€50', url: 'https://buy.stripe.com/aFaeVd0tP02MevCfUy7kc08' },
@@ -144,7 +144,7 @@ export const vinbaccelli: CuratedCoachProfile = {
         {
           id: 'complete',
           name: 'Complete Analysis & Action Plan',
-          detail: 'Up to 25 min video',
+          detail: 'Up to 25 min video · 60–90 min analysis',
           ctaLabel: 'Book Complete Analysis',
           options: [
             { strokes: 1, price: '€100', url: 'https://buy.stripe.com/cNi9AT4K5aHq87efUy7kc0d' },
@@ -157,7 +157,7 @@ export const vinbaccelli: CuratedCoachProfile = {
         {
           id: 'elite',
           name: 'Elite Analysis & Live Consultation',
-          detail: 'Up to 50 min video + 20–30 min live call',
+          detail: 'Up to 50 min video + 20–30 min live call · 5 h of analysis',
           ctaLabel: 'Book Elite Analysis',
           flat: { price: '€500', url: 'https://buy.stripe.com/fZu7sLekF6radrydMq7kc0i' },
         },
@@ -241,17 +241,17 @@ export const vinbaccelli: CuratedCoachProfile = {
       ],
     },
 
-    // ── 6. €10 review bonus ─────────────────────────────────────────────────
+    // ── 6. Leave a review ─────────────────────────────────────────────────
     {
       kind: 'reviewBonus',
       id: 'review-bonus',
-      title: 'Get €10 back',
+      title: 'Leave me a review',
       description:
-        'Leave a 5-star review on Trustpilot and Google, send me a screenshot, and I will credit €10 toward any service.',
+        'If my analysis helped you, a short review on Trustpilot or Google helps other players find honest, detailed feedback. It means a lot to me. Thank you!',
       steps: [
-        'Leave a 5-star review on Trustpilot and on Google.',
-        'Take a screenshot of both.',
-        'Send them to me on WhatsApp and I will credit you €10.',
+        'Pick Trustpilot or Google below.',
+        'Write a few lines about your analysis.',
+        'Send it. That is all, thank you!',
       ],
       actions: [
         { id: 'trustpilot', label: 'Review on Trustpilot', url: TRUSTPILOT_COACH_URL, icon: 'trustpilot' },

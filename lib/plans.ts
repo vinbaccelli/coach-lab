@@ -21,6 +21,8 @@
  *    that plan.
  */
 
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
+
 export type PlanId = 'light' | 'pro' | 'academy';
 export type BillingCycle = 'monthly' | 'yearly';
 
@@ -35,6 +37,8 @@ export interface Plan {
   features: string[];
   /** Shown only when the yearly cycle is selected. */
   yearlyBonus?: string;
+  /** Shown only while the monthly cycle is selected: what switching to yearly adds. */
+  ebookHint?: string;
 }
 
 /**
@@ -72,8 +76,9 @@ export const PRICING_LABEL = 'Launch pricing';
 
 /** Headline for the pricing surface. */
 export const PRICING_HEADLINE = 'Three plans. No storage caps on any of them.';
-export const PRICING_SUBHEAD =
-  'Your videos live on your YouTube. Your reports live in your Google Docs. No per-video fees, no lock-in, no tier that holds your footage hostage.';
+export const PRICING_SUBHEAD = REPORTS_IN_APP
+  ? 'Your videos live on your YouTube. Your reports live in AngleMotion and your screenshots in your own Google Drive. No per-video fees, no lock-in, no tier that holds your footage hostage.'
+  : 'Your videos live on your YouTube. Your reports live in your Google Docs. No per-video fees, no lock-in, no tier that holds your footage hostage.';
 export const PRICING_FOOTNOTE =
   'Every account starts with one free hour of every tool. No card needed to look around.';
 
@@ -82,6 +87,43 @@ export const EBOOK_TITLE = 'Spin Mechanics';
 /** Where coaches write when something billing-related needs a human (same address as /terms and /privacy). */
 export const SUPPORT_EMAIL = 'vinbaccelli@gmail.com';
 const EBOOK_BONUS = `Yearly includes the ${EBOOK_TITLE} ebook, downloadable from your account.`;
+/** Shown on a Pro / Academy card while MONTHLY is selected, so the ebook is visible before the switch. */
+const EBOOK_HINT = `Switch to yearly and get the ${EBOOK_TITLE} ebook free.`;
+
+/**
+ * "One extra month free with yearly, with direct support from Vin."
+ *
+ * OFF until the Stripe side exists (how the month is granted is open, see the
+ * pricing-offers PR) and Vin approves the wording.
+ * [VIN TO CONFIRM] the exact sentence, which plans it covers, and how it is delivered.
+ * The text below is shown only on the YEARLY cycle and only when this is true.
+ */
+export const YEARLY_BONUS_COPY = false;
+export const YEARLY_BONUS_TEXT = 'Yearly plans include one extra month free and direct support from Vin.';
+
+/**
+ * The bonus lines to show under a plan's features, for the selected cycle. ONE
+ * function for /pricing and the landing page, so both always say the same thing.
+ *  - yearly: the ebook line (Pro, Academy), then the extra-month line when
+ *    YEARLY_BONUS_COPY is on (every plan);
+ *  - monthly: only the "switch to yearly" ebook hint, so an offer is never shown
+ *    as if monthly buyers received it.
+ */
+export function planBonusLines(
+  plan: Pick<Plan, 'yearlyBonus' | 'ebookHint'>,
+  annual: boolean,
+  opts: { yearlyBonusCopy?: boolean } = {},
+): string[] {
+  const extraMonth = opts.yearlyBonusCopy ?? YEARLY_BONUS_COPY;
+  const lines: string[] = [];
+  if (annual) {
+    if (plan.yearlyBonus) lines.push(plan.yearlyBonus);
+    if (extraMonth) lines.push(YEARLY_BONUS_TEXT);
+  } else if (plan.ebookHint) {
+    lines.push(plan.ebookHint);
+  }
+  return lines;
+}
 
 export const PLANS: Plan[] = [
   {
@@ -97,6 +139,7 @@ export const PLANS: Plan[] = [
       'Data column beside the player',
       'One snapshot: the frame AI Detect Angles captures',
       'Screenshots',
+      'Player database, and saving to a player from the analysis screen',
       'AngleMotion Academy',
     ],
   },
@@ -111,7 +154,6 @@ export const PLANS: Plan[] = [
       'Recording Hub: screen, webcam and mic',
       'Motion Layer composites',
       'YouTube upload',
-      'Player database, and saving to a player from the analysis screen',
       'AI Track: precision skeleton tracking',
       'Generate: phase captures and slow-motion replay',
       'Multi-phase snapshots',
@@ -120,6 +162,7 @@ export const PLANS: Plan[] = [
       'Your public coach profile',
     ],
     yearlyBonus: EBOOK_BONUS,
+    ebookHint: EBOOK_HINT,
   },
   {
     id: 'academy',
@@ -132,6 +175,7 @@ export const PLANS: Plan[] = [
       'One subscription, central billing',
     ],
     yearlyBonus: EBOOK_BONUS,
+    ebookHint: EBOOK_HINT,
   },
 ];
 

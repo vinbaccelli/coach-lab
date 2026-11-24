@@ -135,6 +135,8 @@ export interface WatermarkArea {
    * and the mark sits at the video's own bottom-left.
    */
   maxBottomY?: number;
+  /** Size of the mark relative to normal (1 = normal). Two videos side by side share ONE smaller mark. */
+  scale?: number;
 }
 
 /**
@@ -170,7 +172,8 @@ export function drawVideoWatermark(
     ? area
     : { x: 0, y: 0, w: W, h: H, maxBottomY: undefined as number | undefined };
 
-  const w = Math.round(Math.max(MIN_WIDTH_PX, Math.min(MAX_WIDTH_PX, box.w * WIDTH_FRACTION)));
+  const scale = area?.scale != null && area.scale > 0 ? area.scale : 1;
+  const w = Math.round(Math.max(MIN_WIDTH_PX, Math.min(MAX_WIDTH_PX, box.w * WIDTH_FRACTION)) * scale);
   const h = Math.round(w / SRC_ASPECT);
   const marginX = Math.round(Math.max(MIN_MARGIN_PX, box.w * MARGIN_FRACTION));
   const marginY = Math.round(Math.max(MIN_MARGIN_PX, box.h * MARGIN_FRACTION));

@@ -20,7 +20,7 @@ export default function PlayersHomeClient() {
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
-  // Without Pro the list stays readable; creating players is server-gated (403).
+  // Without an active plan the list stays readable; creating players is server-gated (403).
   const canEdit = useEntitlement().can('players');
 
   const load = useCallback(async () => {
@@ -63,7 +63,7 @@ export default function PlayersHomeClient() {
 
       {!canEdit ? (
         <PlanLockedNotice feature="players">
-          The player database is part of Pro. Your saved players stay readable; adding or editing them needs Pro.
+          Adding or editing players needs an active plan. Your saved players stay readable.
         </PlanLockedNotice>
       ) : (
       <div

@@ -10,19 +10,25 @@ export const maxDuration = 60;
 
 /**
  * Upload a screenshot to the COACH'S OWN Google Drive and return a link that
- * Google Docs can embed. This is the V1 "bring your own cloud" storage path:
+ * reports (and Google Docs) can show. This is the "bring your own cloud" storage path:
  * image bytes live in the user's Drive (AngleMotion/Screenshots), not on our
  * infrastructure. Files get anyone-with-link read permission so the Docs API
  * can fetch them for insertInlineImage.
+ *
+ * Gate: `saveToPlayer` (Light and up), because saving a screenshot to a player
+ * is Drive-only on every plan: there is no Supabase fallback for new screenshots
+ * any more (lib/reports/saveScreenshot.ts). Failures carry a `code` the app uses
+ * to offer "Reconnect Google Drive": `google_not_connected` (no Google token in
+ * the session) and `google_reauth` (Google refused the token).
  */
 export async function POST(req: Request) {
   const session = await getRouteSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'docsExport');
+  const denied = await requireFeature(session.supabase, { id: session.userId, email: session.email }, 'saveToPlayer');
   if (denied) return denied;
   if (!session.googleAccessToken) {
     return NextResponse.json(
-      { error: 'Google access not granted — sign out and sign in again.' },
+      { error: 'Google access not granted — sign out and sign in again.', code: 'google_not_connected' },
       { status: 403 },
     );
   }
@@ -117,10 +123,9 @@ export async function POST(req: Request) {
     // Docs' insertInlineImage fetches the URI SERVER-SIDE, so the file has to be
     // readable without a session. Workspace domains frequently forbid
     // anyone-with-link sharing and answer "The caller does not have permission"
-    // here. That is not recoverable for a Drive-hosted image, so fail loudly and
-    // let the caller fall back to Supabase storage, whose signed URL Google can
-    // actually fetch — rather than returning a Drive link that silently breaks
-    // the Docs insert later.
+    // here. That is not recoverable for a Drive-hosted image, so fail loudly
+    // (the coach sees the reason and the screenshot is kept for a retry) rather
+    // than returning a Drive link that silently breaks later.
     try {
       await drive.permissions.create({
         fileId,
@@ -144,6 +149,11 @@ export async function POST(req: Request) {
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Drive upload failed';
     console.error('[google/upload-image] failed:', msg);
+    // Google refusing the token (expired, revoked, scope removed): the coach can fix it by reconnecting.
+    const gcode = (e as { code?: unknown } | null)?.code;
+    if (gcode === 401 || /invalid[_ ]credentials|invalid_grant|login required/i.test(msg)) {
+      return NextResponse.json({ error: 'Google refused the connection — reconnect Google Drive.', code: 'google_reauth' }, { status: 401 });
+    }
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
