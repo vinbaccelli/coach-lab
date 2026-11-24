@@ -249,7 +249,7 @@ export default function ControlPanelHome() {
       <details className="cp-details cp-details-primary">
         <summary className="cp-summary">How a full analysis works, start to finish</summary>
         <ol className="cp-steps">
-          <li>Bring a video in — upload a file, or import from a YouTube link.</li>
+          <li>Bring a video in — upload a file, or pull it from Google Drive.</li>
           <li>Step frame by frame to the moment that matters and snapshot it as a phase.</li>
           <li>Run the AI skeleton and Detect Angles, then drag any point the AI got wrong. Your correction wins.</li>
           <li>Build a Motion Layer composite from the frames you choose, as a still or a video.</li>

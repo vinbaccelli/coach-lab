@@ -2362,3 +2362,149 @@ column are still never exported.
 **Not covered.** Paths drawn before this change, and paths drawn on a YouTube/embed source (no video clock), have no times and are always shown, as before. The AI "draw swing from detection" path (`drawSwingFromSegment`) is unchanged: it has no click times.
 
 **Severity.** Medium (visual).
+
+---
+
+## 076 — At the START of an AI Track section the skeleton moves before the player, then the player catches up and they move together; deferred until after V1
+
+**Found:** 2026-11-09, iPhone (coach report, PR #158 preview). Clarified by the coach: it is a start-of-section problem of AI Track, the skeleton moves first, then the player reaches the skeleton and the two move together; the same was seen in generated video before. Seen in very short clips. Present before RTMPose and before the Foot Lines change.
+
+**What that implies.** It lives in the baked track's first samples (it shows in playback and in Generate, which read the same track), not in the live display.
+
+**Candidate tested, NOT reproduced on desktop.** At pass start `runPrecisionPass` takes a probe sample after `seekVideoTo(start)` (`app/analysis/page.tsx:1326`), which waits for `seeked` or 1.5 s but not for the painted frame, then tags the pose with `start`. If the old frame were still on screen the first sample would be the wrong pose. Measured in the real app (headless Chromium, desktop, VP9 640×360 `demo6.webm`, software GL, unlocked whole-video pass): playhead parked at 3.0 s (its pose differs 13.5 % of body height from the t=0 pose) before starting AI Track; the first baked sample matched sample 1 (0.0 %), sample 2 (0.2 %) and sample 3 (0.3 %), i.e. it was the correct t=0 pose, with no stale-frame sample. Caveat: the player is almost still at the start of that clip (steps 0.0–0.2 % per sample), so a small tag error would not show; and iOS WebKit paints seeked frames later than desktop Chromium (the iPhone panel shows `seek: frame not ready (rs=4, not painted), retrying`), so this says nothing yet about the phone.
+
+**Still open (none verified):** a presented-frame vs requested-time offset on iOS at the first seeks; edge behaviour of the centred smoothing in `smoothBakedTrack` at the start of a track; the time tag of the first samples of a short section.
+
+**How to capture it on the phone:** `…/analysis?debug=1&vdebug=1`, a short serve clip, run AI Track from the start; copy the panel lines `AI Track asked …` and the every-10th-seek lines (video time, presented frame time) plus COPY TRACE.
+
+**Decision (architect):** after V1.
+
+**Update 2026-11-15 — reported again (coach, iPhone screenshot of a generated video: "the skeleton always slowly joins the player"). Two code findings and one change.**
+
+1. *Sample time tag ≠ frame time (measured, desktop).* The AI Track pass tagged every baked sample with the time it ASKED for (`video.currentTime` after the seek), not with the time of the frame the browser actually presented. `?vdebug=1` frame log, Chromium, VP9 clip, 30 fps sampling: presented `mediaTime` − asked time = −33 … +33 ms, mean about +14 ms (the presented frame is usually LATER), so the skeleton shows the pose of a slightly later frame: it leads the player, which is the symptom in this entry. Playback (`lookupBakedPose(video.currentTime)`) and Generate (`lookupBakedPose(mediaTime)`) read the track by time, so the tag is the only thing that sets the alignment.
+2. *The first sample skipped the paint wait.* Every other sample waits for the painted frame (`seekTo`: `seeked` + one `requestVideoFrameCallback`; the iPhone panel shows `seek: frame not ready (rs=4, not painted)`), but the first one (the probe, which also seeds the crop tracker) waited only for `seeked`, after the longest seek of the pass.
+
+**Change (`app/analysis/page.tsx`, `lib/analysisFrameLog.ts`, `lib/skeletonSwitches.ts`).** The first seek now has the same paint wait; samples are still tagged with the asked time by default; the new link switch `?tag=presented` tags them with the presented frame's own time (`mediaTime`, asked time where the browser gives none) for a phone experiment. `?legacy=1` keeps the old first-seek wait. Debug only (`?debug=1` panel): `AI Track first sample: asked … · video at … · readyState …` and `AI Track timing: presented frame vs asked time · mean … ms · max … ms over N samples`; the `?vdebug=1` log of the AI Track pass now also records its first 6 seeks (new optional parameter, the default keeps "every 10th").
+
+**Not proven.** The measured offset is small on desktop (a fraction of a frame; and the browser gave a presented-frame time for only 35 of 181 samples, the rest hit the existing 300 ms fallback); whether it is the whole "slowly joins" effect on the iPhone is unknown. The `AI Track timing` line on the phone answers it: if mean/max there are tens of ms (and most samples have a frame time), run the same clip with `?tag=presented` and compare; if they are ~0, tagging was not the cause and the next suspect is the one still open (edge behaviour of the centred smoothing at the start of a track, and the crop tracker's first box). A/B on the phone: the same clip with `&legacy=1` and without (legacy also turns off the other skeleton changes).
+
+**Severity.** Medium (visual accuracy at the start of a track).
+
+---
+
+## 077 — Page restarted on the FIRST AI Track run after loading (iPhone); second run fine
+
+**Found:** 2026-11-09, iPhone, PR #158 preview: the first AI Track run reloaded the page (the coach loses everything and starts again); the second run completed. Same class as the Motion Layer refresh problem (Stage 2, M4).
+
+**Not proven.** The restart reason is unknown: the next load should have shown the restart breadcrumb ("The page restarted. Reason: killed by the phone / a script error / a reload", `lib/restartBreadcrumb.ts`), but its text has not been captured.
+
+**Measured on desktop, not a phone (headless Chromium, software GL, demo clip 640×360, sum of all browser-process RSS, one run each):**
+
+| | live skeleton running | AI Track peak | after AI Track |
+|---|---|---|---|
+| default (RTMPose-t live) | 1302 MB | 2175 MB | 2097 MB |
+| `?live=off` (MoveNet only) | 1111 MB | 2012 MB | 1987 MB |
+
+So RTMPose adds about 160–190 MB resident here. It is never released while AI Track runs: `rtmLiveRef.current.eng` in `components/Canvas.tsx` is created once and no code disposes it (the bake only stops calling it, `useRtmposeLive` is false while baking). That is a hypothesis for the first-run kill (cold start loads MediaPipe heavy on top of the live engines), not a finding.
+
+**Tried, no memory effect (2026-11-09):** branch `fix/rtmpose-release-on-aitrack` (`fda4ab24`, NO PR) disposes the RTMPose sessions when the bake starts and re-creates the engine afterwards (verified: after clearing the track the live panel shows `rtmpose ready in 395 ms` and det/s again). Measured on desktop, one run each, same script: AI Track peak 2247 MB / after 2158 MB with the release vs 2175 / 2097 without it (`?live=off`: 2012 / 1987), i.e. no reduction, within run-to-run noise. Likely reason, unverified: ORT's WebAssembly memory is never returned to the OS, so freeing sessions inside it does not lower the process size; only terminating the worker that owns it would. That needs RTMPose in a worker we create ourselves (a larger change), so the branch is parked, not proposed.
+
+**Next step (needs the coach):** on the iPhone, first AI Track run after a fresh load with `?live=off` as the control (does it still restart?), and the restart breadcrumb text after a reload. Without that we do not know that RTMPose is involved at all.
+
+**Severity.** High (work lost; first impression).
+
+## 078 — Player pictures are public URLs (profile photos, timeline pictures, meal photos)
+
+**Found:** 2026-11-14, while adding meal photos (player database PR E).
+
+**Symptom.** A picture of a player can be opened by anyone who has its URL, without a login.
+
+**Verified root cause.** The `player-assets` bucket is created public (`supabase/migrations/20260615140000_player_sessions.sql`, `public = true`) and every route stores `getPublicUrl(...)` (`app/api/players/[id]/photo/route.ts`, `app/api/share/[token]/route.ts`, `lib/players/mealPhotos.ts`). Paths contain three random UUIDs, so URLs cannot be guessed and the bucket cannot be listed without the coach's login (storage policies check the first folder = the coach).
+
+**Fault assessment.** Pre-existing design, kept for meal photos so all player pictures behave the same. Acceptable while URLs stay private between coach and player, but a forwarded URL keeps working, and deleting the player's link does not revoke it.
+
+**Proposed fix.** Make the bucket private and serve pictures through short-lived signed URLs, created by the server when it returns a profile, a timeline or a meal (coach routes with the coach's session, share routes with the service role scoped to the link's player). Touches every route that returns a picture and the existing stored URLs (store the path instead of the URL, or derive it), so it is a separate PR with its own migration and tests.
+
+**Severity.** Medium (privacy; no listing possible, no guessing possible).
+
+## 079 — Tracker entries could be filed under another player than their tracker's (RLS)
+
+**Found:** 2026-11-14, by a new database test for the workouts migration (same pattern), then confirmed on the trackers migration with `tests-db/policy-scoping.rls.test.ts` (fails before the fix, passes after).
+
+**Symptom.** A signed-in coach could insert or move a tracker entry with `tracker_id` of one of their trackers and `player_id` of another player (their own or another coach's).
+
+**Verified root cause.** `20261114090000_player_trackers.sql`, policies `tracker_entries_insert_own` / `tracker_entries_update_own`: `exists (select 1 from public.player_trackers t where t.id = tracker_id and t.player_id = player_id …)`. Inside the subquery the unqualified `player_id` resolves to `t.player_id` (the subquery's table comes first), so the condition compared the tracker with itself and never checked the entry's player.
+
+**Fault assessment.** Mine (player database PR C). Impact was limited: the row stays the inserting coach's (`coach_id` is checked), other coaches never see it (select policy), and every reader goes through the entry's own tracker (share routes and the timeline filter by the player's tracker ids), so nothing leaked or showed in the wrong place. Integrity hole, not a disclosure.
+
+**Fix.** `20261114113000_fix_tracker_entry_policies.sql` re-creates both policies with the row's columns written with the table name (`player_tracker_entries.player_id`); the original trackers file carries the same corrected text so re-running it cannot bring the bug back. Every other player-database policy was checked for the pattern: the `players p where p.id = player_id` subqueries are correct (`players` has no `player_id` column); the new workouts migration had the same mistake in its log policies and was fixed before it shipped.
+
+**Severity.** Medium (RLS integrity), fixed.
+
+## 080 — Timeline videos showed as empty grey boxes on phones (coach profile and share link)
+
+**Found:** 2026-11-14, reported from a phone (Samsung Internet) on a player's share link; the player saw the same.
+
+**Symptom.** Every YouTube video in the player timeline rendered as a blank light-grey box. No player, no error, no way to open the video.
+
+**Verified root cause.** The site sends `Cross-Origin-Embedder-Policy: credentialless` on every page (`next.config.js`, needed for the analysis engine). Under it, Chromium-based browsers refuse to render a cross-origin frame unless the framed page sends its own COEP header (YouTube's embed does not) or the frame carries the `credentialless` attribute. The timeline frame (`components/players/history/HistoryFeed.tsx`, and before it the share-link timeline since #177 and `PlayerTimeline.tsx`) had neither. Reproduced in Chromium with two local origins: the plain frame stays empty, the `credentialless` one loads. The report pages already handled this (`components/reports/VideoBlock.tsx`, `lib/trustpilot.ts` documents the same mechanism). Uploads are `unlisted`, so privacy was not the cause.
+
+**Fault assessment.** Mine (share-link timeline #177, carried into the universal timeline #192). The fix pattern already existed in the repo and was not reused.
+
+**Fix.** The timeline renders videos with `VideoBlock` (frame marked `credentialless`, plus an always-visible "Watch on YouTube" link for browsers that still block it). Regression check: `scripts/local-stack/e2e/video-embed.e2e.mjs` (stubs the YouTube embed with a page that, like YouTube, sends no COEP header; fails before, passes after).
+
+**Same pattern elsewhere (not changed).** `app/analysis/page.tsx` generic URL embeds (`genericEmbedSrcA/B` frames) have no `credentialless` attribute either. They live in the protected analysis surface, so they were left alone; check whether they show the same blank frame for non-YouTube links before deciding.
+
+**Severity.** High (user-visible, every timeline video), fixed.
+
+## 081 — AI Track skeleton showed limbs crossed in an X (each knee/elbow joined to the opposite ankle/wrist)
+
+**Found:** 2026-11-14, iPhone screenshot of a generated AI Track video (player seen from behind, wide stance): the two shin lines cross between knee and ankle, about twice the length of the thighs. Reported as "humanly impossible".
+
+**Verified root cause (code + synthetic measurement; NOT yet confirmed on the real clip).** `lib/skeletonValidate.ts` repaired left/right swaps only against the PREVIOUS frame (step 1). A swap that is present from the first frame, or lasts the whole clip, never "jumps", so it was kept; the local bone-length check (step 4) compares each bone with its neighbours, which carry the same swap. This is the limitation already written in `docs/SKELETON_VALIDATION.md` ("first-frame L/R swap can't be detected"). Measured on synthetic tracks with ground truth: a whole-clip wrist/elbow swap stayed 90 → 90 swapped frames before the fix.
+
+**Fix.** New step 0 in `validateTrack`: inside each frame, a knee, ankle, elbow or wrist whose bone to its own hip/knee/shoulder/elbow is physically impossible (ankle/wrist: longer than 1.4 × the thigh/upper arm of the same frame; knee/elbow: longer than 1.35 × a rolling median of the clip's best-assignment length) and clearly shorter the other way round (< 0.7, saving ≥ 0.08 body heights) is swapped back. Needs no history. Measured: wrists/elbows/arms 90 → 0 swapped frames in every kind and frame rate; the reported wide-stance case is repaired exactly (labels only, nothing moved); genuine crossover steps and folded arms are untouched (0 repairs, the same as before). First version of the step used a clip-wide reference and wrongly "repaired" genuine crossings (90 and 40 frames); found by `tests/skeletonLimbs.test.ts` before anything shipped, and replaced by the same-frame ruler.
+
+**Limits (honest).** (1) Legs together or parallel and mirror-symmetric: a knee/ankle swap changes no bone length and no line crossing, so it is geometrically a valid skeleton and cannot be told apart without history; not repaired (and not visible as an X). (2) A crossed pose whose bone lengths stay plausible is indistinguishable from a genuine crossover step; left alone on purpose. (3) Real footage and the iPhone: not measured here. After the next AI Track with `?debug=1`, the panel line `bake: … swaps fixed N` should now be above 0 on the affected clip; `?legacy=1` runs the old path for comparison.
+
+**Fault assessment.** Mine to fix (skeleton validation, Stage 2a); the limitation was documented, not scheduled.
+
+**Severity.** High (visible and implausible skeleton on a common view: player seen from behind).
+
+**Follow-up (2026-11-19, architect's export of an ATP serve).** The X came back at the serve's kick-back: the clip had normal frames first, then the pose jumped. Step 0 swapped the ankles inside the frame, then step 1 (left/right swap against the previous frame, one joint pair at a time) swapped the knees back to match the previous frame but not the ankles, leaving each knee joined to the other leg's ankle. Fix: the in-frame limb check (`fixLimbAssignment`, `lib/skeletonValidate.ts`) now runs a second time after step 1. Regression: `tests/skeletonKickX.test.ts` (fails before, passes after). Reproduced from joint positions read off the export, not from the original video; the original clip was not available.
+
+## 082 — Drawing tools on a phone: precision blocked selecting, data column hard to move, text box vanished
+
+**Found:** 2026-11-01 (coach report).
+
+**Precision blocked selecting (fixed).** With precision on, `onPointerDown` (components/Canvas.tsx, "rule 3: precision anchor acquisition") took EVERY single-finger touch as the precision anchor for any tool except Zoom and Object Multiplier, and returned before the Select tool's hit-testing ran, so nothing could be tapped, selected or moved, and the data column could not be dragged either. Now the Select tool is exempt (it does not draw), and the data column's header/corner are checked before the anchor. Drawing tools still use precision exactly as before; desktop is unaffected (precision is touch-only).
+
+**Data column on a phone (fixed).** Header band and resize corner were 26 px and ~28 px. On a finger the header band is at least 44 px and the corner a 44 px square (`dataColumnHit`, lib/drawingTools.ts). Pressing the header selects the column: only then the drag dots and a round resize knob show, and only then the corner resizes; any other press deselects. A drag keeps the column inside the video picture (`clampColumnPos`); the size limits (0.6×–2.5×) are unchanged. The column's press returns before any drawing or pan, as before. Not changed: the column's first position (it can start in the letterbox until it is dragged) and the zoom ≠ 1 hit-test mismatch noted in Canvas.
+
+**Text box vanished on a finger (fixed).** Reproduced in Chromium with a 180 ms touch (CDP): pointerdown → the new text box takes focus → pointerup → the browser's compatibility mousedown on the canvas → the box blurs, commits empty and unmounts. The draft's focus guard only covered the first animation frame, and a real finger lifts later. A finger/pen pointerdown with the Text tool is now cancelled (`preventDefault`), which suppresses those compatibility mouse events. A quick synthetic tap (the earlier test) never showed it. Toolbar: Text is now right after Style in the Draw list, and Text size is the first option in Style when Text is active (still hidden in the icon-only rail, as before).
+
+**Follow-up (2026-11-18, architect's phone test).** The column could not be moved out of the video picture (it was clamped to it), so the empty bars above/below a small video were unusable. `clampColumnPos` now clamps to the whole canvas; the generated video still keeps the column inside the video frame (`drawColumn` in `components/Canvas.tsx`).
+
+**Severity.** High (core drawing on the phone).
+
+## 083 — Phone: right selection tab hard to grab; expanded toolbar broken
+
+**Found:** 2026-11-01 (coach report).
+
+**Selection tabs (fixed).** Measured in Chromium (390×844 and 844×390, touch emulation): the tabs are the top element at every probed point, before and after moving the playhead; nothing covers them. Each tab is 46×34 px and sits 2 px ABOVE the track. A finger aimed at a tab, especially with the ball right under it, lands a few px lower, on the track, and that press scrubs (moves the ball) instead of grabbing the tab. On a phone each tab's grab area now continues 12 px down into the track's top band (`TAB_TRACK_GRAB_PX`, lib/timelinePress.ts), which lies above the ball (centred, 15 px below the track top), so a press there grabs the tab: 48 px tall in total. Scrubbing, the ball and pinch are unchanged elsewhere. Not reproduced: why the RIGHT tab specifically; iOS edge-swipe navigation near the right screen edge is a candidate that cannot be tested here.
+
+**Expanded toolbar (fixed).** Portrait: expanding PUSHED the layout (rail 60 → 196 px), halving the video and cutting the play-controls row off. Landscape: the actions footer (Screenshot … Control Panel, ~330 px) was pinned and the tool list got zero height, so the tools and the close button were squeezed out (no navigation, no close). Now on a phone the rail keeps its 60 px place and the labelled toolbar OVERLAYS the video, ending above the timeline (measured, `overlayBottomInset`, lib/timelineView.ts); tools and footer form one scrolling column; the close button stays pinned at the top and closes it with one tap. Desktop is unchanged.
+
+**Severity.** Medium.
+
+## 084 — The player timeline's add controls looked removed (Timeline was the 7th tab, off-screen on a phone)
+
+**Found:** 2026-11-16, coach report: the timeline where comments, pictures, YouTube videos and links are added was "not on the player database anymore".
+
+**Verified root cause.** Nothing was deleted. When the profile became tabs (player database PR C) the Timeline, with its four add controls, became the 7th tab. At 390 px the tab row shows four tabs; the Timeline tab sits off-screen until the row is swiped (reproduced in the real app at phone size on `main`: the default Overview has none of the four controls, the Timeline tab has all four).
+
+**Fix.** The Timeline tab was made the second tab, and on 2026-11-17 (architect's request, PR #209) the FIRST tab, which the profile opens on (`components/players/ProfileTabs.tsx`), visible without swiping; guarded by `tests/profileTabs.test.ts`. The coach chose this over repeating the timeline on the Overview.
+
+**Fault assessment.** Mine (PR C layout): a daily action was put behind a tab that a phone hides.
+
+**Severity.** High (a daily action looked gone), fixed.

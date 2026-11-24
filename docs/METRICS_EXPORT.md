@@ -13,6 +13,20 @@ range as a hold (see *Snapshots (holds)*).
   capture, no snapshot writes; snapshots are only read, at export start.
 - **Range.** Defaults to the whole video. *Use section* copies the Metrics
   section handles (`metricsSectionStart/End`, read only). *Whole video* resets.
+  The timeline's section handles show as soon as the coach opens Metrics
+  (`metricsSectionShown`, `lib/aiTrackScope.ts`): with no section stored they
+  show the whole clip without storing it (`displayedSection`), so the snapshot
+  span and skeleton defaults apply as before. Motion Layer's handles show as soon
+  as its section exists (`motionSectionShown`), not only once its draft is built.
+- **Nothing included.** With every Include switch off the export is the plain
+  section (no overlay pass, only the watermark), at the chosen speed, sound and
+  quality; the summary reads "Includes: video".
+- **Phone layout.** On a phone the panel is one full-screen sheet (no floating
+  box over the page) in this order: preview, range, Include, Speed, Sound,
+  Quality; the estimate and the Export button are pinned at the bottom
+  (`export-actions`, sticky). Checked at 390×844 and 844×390: no horizontal
+  scroll, controls ≥ 44 px (the preview volume slider, from the shared sound
+  controls, is shorter).
 - **Trim.** `components/TrimRangeBar.tsx`: two handles on one track (pointer
   events, 44 px hit areas, arrow keys), *Use playhead* per handle, "Keeping X of
   Y". Same rules as the Recording Hub trim (copied, not shared:
@@ -147,8 +161,17 @@ the file will contain ("Includes: video + skeleton + drawings").
     Numbers: steps where the video moved, and where the skeleton stayed still
     (after the export's own analysis, also that analysis's numbers above).
     A still scene gives no verdict, so a player standing still is not refused.
-- **Not exported in V1:** AI measurement overlays, the data column, the ball
-  trail, the zoom (the file is always the full, unzoomed frame).
+- **Data column** (Include switch, off by default; off = the export is exactly as
+  before). Drawn by the screen's own function (`drawDataColumnBox`, Canvas) where
+  the coach placed it, kept inside the video. Playback frames (only with the
+  skeleton): the coach's own live rows plus L/R Elbow and L/R Knee computed from
+  the baked AI Track pose at that time with the shared `computeJointAngles`
+  (`lib/biomechanics/measurements.ts`, unchanged); "—" where there is no pose or a
+  joint is not tracked. Holds: that snapshot's own stored column and name. An
+  empty column is not drawn. Without the skeleton and without a snapshot hold the
+  switch is disabled ("No values to show").
+- **Not exported in V1:** AI measurement overlays, the ball trail, the zoom (the
+  file is always the full, unzoomed frame).
 
 ## Speed and sound (slow motion)
 

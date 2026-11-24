@@ -2,7 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { BoxSelect, Check, Layers, Minus, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { BoxSelect, Check, Layers, Minus, Plus, Sparkles, Target, Trash2 } from 'lucide-react';
 import {
   STRO_MOTION_FRAME_COUNTS,
   type StroMotionFrameCount,
@@ -13,14 +13,9 @@ import type { StroMotionBackground, StroMotionVideoOrder } from '@/lib/stroMotio
 // `import type` only — erased at compile time, so the panel gains no runtime
 // dependency on the hook; the summary shape keeps a single definition.
 import type { StroAutoRunSummary } from '@/hooks/useStroMotion';
+import { formatFrameTime, generateDisabledReason } from '@/lib/stroMotionHints';
 
-function formatTimeShort(seconds: number): string {
-  if (!Number.isFinite(seconds)) return '0:00';
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 10);
-  return `${mins}:${secs.toString().padStart(2, '0')}.${ms}`;
-}
+const formatTimeShort = formatFrameTime;
 
 const OBJECT_TYPES: { id: StroMotionObjectType; label: string }[] = [
   { id: 'player', label: 'Player' },
@@ -80,6 +75,11 @@ export interface StroMotionPanelProps {
   onVideoOrderChange?: (order: StroMotionVideoOrder) => void;
   /** Auto-detect selection areas for all frames using skeleton keypoints */
   onAutoSelectAll?: () => void;
+  /** Racket detection on/off for Auto Detect (D-FINE + SAM). Off by default on phones: it needs about 1 GB more memory. */
+  racketDetect?: boolean;
+  onRacketDetectChange?: (on: boolean) => void;
+  /** Show the memory warning next to the switch (phones). */
+  racketDetectPhoneWarning?: boolean;
   /**
    * Outcome of the last Auto Detect pass, or null when none has run since the
    * draft was built/cleared. Drives the completion state in the status line.
@@ -256,12 +256,16 @@ export default function StroMotionPanel({
   videoOrder = 'forward',
   onVideoOrderChange,
   onAutoSelectAll,
+  racketDetect,
+  onRacketDetectChange,
+  racketDetectPhoneWarning,
   lastAutoRun = null,
   compact = false,
   showLabels = false,
 }: StroMotionPanelProps) {
   const allReady = frames.length > 0 && readyCount === frames.length;
   const canGenerate = !disabled && !isGenerating && !isProposingFrame && allReady;
+  const generateReason = generateDisabledReason({ disabled: !!disabled, isGenerating: !!isGenerating, isProposingFrame: !!isProposingFrame, frameCount: frames.length, readyCount });
   const frameCountIdx = STRO_MOTION_FRAME_COUNTS.indexOf(frameCount);
   const canDecrement = frameCountIdx > 0;
   const canIncrement = frameCountIdx >= 0 && frameCountIdx < STRO_MOTION_FRAME_COUNTS.length - 1;
@@ -291,6 +295,30 @@ export default function StroMotionPanel({
     const LB = ({ icon, label }: { icon: React.ReactNode; label: string }) => showLabels
       ? <><span style={{ display: 'flex', width: 20, justifyContent: 'center', flexShrink: 0 }}>{icon}</span><span>{label}</span></>
       : <>{icon}</>;
+
+    const racketSwitch = onRacketDetectChange ? (
+          <>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!!racketDetect}
+              aria-label="Racket detection for Auto-detect"
+              data-testid="racket-detect-switch"
+              disabled={!!disabled || isGenerating || isProposingFrame}
+              onClick={() => onRacketDetectChange(!racketDetect)}
+              title={racketDetect ? 'Racket detection ON — Auto-detect also looks for the racket (uses more memory). Tap to turn off.' : 'Racket detection OFF — Auto-detect cuts out the player only. Tap to turn on.'}
+              style={ib(!!racketDetect)}
+            >
+              <Target size={showLabels ? 18 : 14} strokeWidth={2} />
+              {showLabels ? <span>{`Racket detect: ${racketDetect ? 'On' : 'Off'}`}</span> : null}
+            </button>
+            {racketDetect && racketDetectPhoneWarning ? (
+              <div role="note" data-testid="racket-detect-warning" style={{ fontSize: showLabels ? 11 : 9, lineHeight: 1.3, color: 'var(--cl-warning, #E8A33D)', textAlign: showLabels ? 'left' : 'center', padding: '0 2px' }}>
+                {showLabels ? 'Uses about 1 GB more memory. On some iPhones the page may restart — try fewer frames first.' : 'Uses lots of memory'}
+              </div>
+            ) : null}
+          </>
+    ) : null;
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: showLabels ? 6 : 4, alignItems: showLabels ? 'stretch' : 'center', padding: '4px 0', position: 'relative' }}>
@@ -419,6 +447,7 @@ export default function StroMotionPanel({
             <Sparkles size={14} strokeWidth={2} />
           </button>
         )}
+        {racketSwitch}
 
         <div style={{ height: 1, background: 'var(--cl-border)', width: 32, margin: '4px auto' }} />
 
@@ -434,7 +463,7 @@ export default function StroMotionPanel({
 
         <div style={{ height: 1, background: 'var(--cl-border)', width: 28, margin: '4px auto' }} />
 
-        <button type="button" disabled={!canGenerate} onClick={onGenerate} title="Generate" style={ib()}>
+        <button type="button" disabled={!canGenerate} onClick={onGenerate} title={generateReason || 'Generate'} style={ib()}>
           <Check size={14} strokeWidth={2} />
         </button>
 
@@ -482,6 +511,7 @@ export default function StroMotionPanel({
               <LB icon={<Sparkles size={18} />} label="AI auto-detect" />
             </button>
           )}
+          {racketSwitch}
 
           <div style={{ height: 1, background: 'var(--cl-border)', width: '100%', margin: '4px 0' }} />
 
@@ -497,7 +527,7 @@ export default function StroMotionPanel({
 
           <div style={{ height: 1, background: 'var(--cl-border)', width: '100%', margin: '4px 0' }} />
 
-          <button type="button" disabled={!canGenerate} onClick={onGenerate} style={ib()}>
+          <button type="button" disabled={!canGenerate} onClick={onGenerate} title={generateReason || undefined} style={ib()}>
             <LB icon={<Check size={18} />} label="Generate Motion Layer" />
           </button>
 
