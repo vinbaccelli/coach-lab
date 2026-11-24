@@ -29,6 +29,7 @@ import {
   PRICE_TAX_NOTE,
   formatMaybePrice,
   maxYearlySavingsPct,
+  planBonusLines,
   planPrice,
   yearlyPerMonth,
   yearlySavingsLabel,
@@ -295,17 +296,18 @@ export default function PricingClient({ prices }: { prices: PlanPrices }) {
                   ))}
                 </ul>
 
-                {/* Annual-only sweetener. Hidden on monthly so the offer is never
-                    shown to someone who would not actually receive it. */}
-                {plan.yearlyBonus && annual && (
-                  <p style={{
+                {/* Yearly bonuses (lib/plans.ts planBonusLines). On monthly only the
+                    "switch to yearly" ebook hint shows, so an offer is never shown
+                    as if a monthly buyer would receive it. */}
+                {planBonusLines(plan, annual).map((line) => (
+                  <p key={line} data-plan-bonus style={{
                     margin: '16px 0 0', padding: '10px 12px', borderRadius: 10,
                     background: 'var(--cl-accent-soft)', textAlign: 'left',
                     fontSize: 12, fontWeight: 600, lineHeight: 1.5, color: INK,
                   }}>
-                    {plan.yearlyBonus}
+                    {line}
                   </p>
-                )}
+                ))}
 
               </div>
             );
