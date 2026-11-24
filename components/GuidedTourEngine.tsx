@@ -64,6 +64,8 @@ const MARGIN = 12;
 
 /** Smallest card height worth showing when no side has room for the whole card. */
 const MIN_CARD_H = 150;
+/** Steps where the coach presses the target itself: a shorter, scrolling card beats one lying over the button. */
+const MIN_CARD_H_ACTION = 100;
 /** Below this width the step picture starts folded away (phones). */
 const COMPACT_W = 640;
 
@@ -162,7 +164,7 @@ interface TipPlacement {
  * scrolls). Working areas that fill the screen are the one exception — the
  * card tucks into a corner of the area, away from what the step is about.
  */
-function resolveTooltipPos(
+function placeCard(
   target: Rect | null,
   tip: { w: number; h: number },
   step: TourStep,
@@ -214,8 +216,20 @@ function resolveTooltipPos(
 
   // No side holds the whole card: shorten it on the roomier of above/below.
   const vert: Side = space.top > space.bottom ? 'top' : 'bottom';
-  if (space[vert] >= MIN_CARD_H) return { ...along(vert, space[vert]), maxH: space[vert] };
+  if (space[vert] >= (step.advance.kind === 'next' ? MIN_CARD_H : MIN_CARD_H_ACTION)) return { ...along(vert, space[vert]), maxH: space[vert] };
   return centred;
+}
+
+/**
+ * Where the card goes, never taller than the screen. On a phone held sideways (about 390 px high) a card
+ * of 400-540 px used to start above the top edge and lose its buttons; now it is shortened to the screen
+ * and scrolls inside itself.
+ */
+function resolveTooltipPos(target: Rect | null, tip: { w: number; h: number }, step: TourStep): TipPlacement {
+  const maxCardH = Math.max(MIN_CARD_H_ACTION, viewport().h - 2 * MARGIN);
+  if (tip.h <= maxCardH) return placeCard(target, tip, step);
+  const p = placeCard(target, { w: tip.w, h: maxCardH }, step);
+  return { ...p, maxH: Math.min(p.maxH ?? maxCardH, maxCardH) };
 }
 
 /**

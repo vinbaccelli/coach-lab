@@ -146,6 +146,25 @@ function swallowMediaEvents(video: HTMLVideoElement): () => void {
 
 const wait = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
+// The last time the person touched or pressed anything (any page): a play that follows it is theirs.
+let lastGestureTime = 0;
+let gestureHooked = false;
+const lastGestureAt = () => lastGestureTime;
+function hookGestures(): void {
+  if (gestureHooked || typeof window === 'undefined') return;
+  gestureHooked = true;
+  for (const t of ['pointerdown', 'touchstart', 'keydown'] as const) window.addEventListener(t, () => { lastGestureTime = Date.now(); }, true);
+}
+
+/**
+ * After the prime (a muted play, then pause, with the media events hidden from the app) the video must be PAUSED. If the pause did not hold
+ * (real iPhone: the clip played by itself with the timeline's ball stuck at the start, because the app never heard "play"), pause it
+ * and tell the app. Never when the coach pressed something after the prime ended: that is their play.
+ */
+export function shouldForcePause(s: { paused: boolean; lastGestureAt: number; settleStartedAt: number }): boolean {
+  return !s.paused && s.lastGestureAt < s.settleStartedAt;
+}
+
 /** Seek to 0.001 and wait for 'seeked' (or `ms`). */
 function nudge(v: HTMLVideoElement, ms = 700): Promise<void> {
   return new Promise((resolve) => {
@@ -186,6 +205,50 @@ async function prime(
   }
   log(`S4 prime: ${result}`);
   await nudge(v);
+  await settlePaused(v, log, lastGestureAt);
+}
+
+/** How long after the prime a self-started play is still undone (a real iPhone started it late, after the first checks). */
+export const SETTLE_WATCH_MS = 6000;
+
+/**
+ * Checks right after the prime, and for SETTLE_WATCH_MS after it, that the video really is paused: on a timer, and on any 'play' the
+ * element fires (which the app also hears, so its timeline state agrees with the video afterwards). A play that follows a touch or
+ * key press is the coach's and is left alone.
+ */
+async function settlePaused(v: HTMLVideoElement, log: (s: string) => void, lastGestureAt: () => number): Promise<void> {
+  const settleStartedAt = Date.now();
+  const undo = (why: string) => {
+    if (!shouldForcePause({ paused: v.paused, lastGestureAt: lastGestureAt(), settleStartedAt })) return;
+    try { v.pause(); } catch { /* noop */ }
+    try { v.dispatchEvent(new Event('pause')); } catch { /* noop */ }
+    log(`the video was still playing after the prime: paused (${why})`);
+  };
+  // Hold the window itself: the watch below outlives this call, and must not depend on a global that can be gone by then.
+  const win = window;
+  const sleep = (ms: number) => new Promise<void>((r) => win.setTimeout(r, ms));
+  const onPlay = (e: Event) => { if (e.target === v) win.setTimeout(() => undo('play event'), 0); };
+  win.addEventListener('play', onPlay, true);
+  const stopAt = Date.now() + SETTLE_WATCH_MS;
+  // The first checks hold up the caller (as before); the rest of the watch runs on its own, so "frame decoded" is not delayed by it.
+  let waited = 0;
+  for (const ms of [0, 250, 750]) {
+    if (ms) { await wait(ms); waited += ms; }
+    undo(`${waited} ms`);
+  }
+  void (async () => {
+    try {
+      for (const ms of [1500, 2000, 1500]) {
+        if (Date.now() >= stopAt) break;
+        await sleep(ms); waited += ms;
+        undo(`${waited} ms`);
+      }
+      const left = stopAt - Date.now();
+      if (left > 0) await sleep(left);
+    } finally {
+      win.removeEventListener('play', onPlay, true);
+    }
+  })();
 }
 
 /**
@@ -201,6 +264,7 @@ export function ensureFirstFrame(
   let running = false;
   let finished = false;
   // One state per load: the page's effect calls this again for each new src.
+  hookGestures();
   const state: FirstFrameState = { touched: false, reachedMetadata: v.readyState >= 1, last: 'waiting for metadata' };
   states.set(v, state);
   const log = (s: string) => {

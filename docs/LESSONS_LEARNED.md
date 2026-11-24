@@ -906,3 +906,50 @@ depend on what failed; "called play()" is not "it plays", so check the effect
 - **Verified:** the state is the element's own (`paused`/`currentTime` read directly), and no app code resets slot A's time. Root cause not proven without the device.
 - **Fix:** detect (frozen clock while playing; seek that did not land), trace the state that tells the candidate causes apart, recover by reloading the same blob, and make Play after the end start from 0.
 - **Class of mistake:** a workaround that drives the media element (prime/nudge) can leave it in a state the app never notices. Anything that pokes the element needs a watchdog that notices the element stopped obeying.
+
+---
+
+## 022 — A form that fits on a desktop overflowed the phone because of one input's intrinsic width
+
+*2026-11-14 · branch `feat/nutrition` (player database PR E)*
+
+- **Symptom:** the nutrition plan editor was 470 px wide inside a 358 px section on a 390 px phone: fields cut off on the right, the page scrolled sideways inside the card.
+- **Verified root cause (measured in Chromium at 390 px):** each number field was `<span style="display:flex"><input style="width:100%">kcal</span>` inside a grid. In the min-content pass a percentage width counts as `auto`, so the input contributed its intrinsic width (`size=20` characters at 16 px); the grid column took the largest such contribution and every row grew to it.
+- **Fix:** inputs in flex rows get `width: 0; flex: 1 1 auto` (they contribute nothing to the min-content width and grow to fill); number fields sit in a `repeat(auto-fill, minmax(116px, 1fr))` grid so phones get two per row.
+- **Class of mistake:** `width: 100%` does not stop an input from widening its container: it only applies once the container's width is known. Measure the widest element at phone width (`getBoundingClientRect().right > innerWidth`) before trusting a screenshot taken at desktop width.
+
+---
+
+## 023 — An RLS check that compared a column with itself
+
+*2026-11-14 · branch `fix/tracker-entry-policies` (KNOWN_ISSUES 079)*
+
+- **Symptom:** a database test expected an insert to be refused (an entry pointing at one player's tracker but filed under another player) and the insert succeeded.
+- **Verified root cause:** in `exists (select 1 from player_trackers t where t.id = tracker_id and t.player_id = player_id)`, the unqualified `player_id` resolves to `t.player_id`: SQL looks in the subquery's own tables first. `tracker_id` happened to work only because `player_trackers` has no column of that name.
+- **Fix:** write the policy row's own columns with the table name (`player_tracker_entries.player_id`); a regression test inserts the cross-player row and expects 42501.
+- **Class of mistake:** a security condition that reads correctly to a human but binds to a different column than intended, and a test suite that only tried the obvious attack (someone else's tracker), not the mismatched pair (my tracker, someone else's player). In policies, qualify every outer column inside a subquery, and test each relation the policy is meant to tie together.
+
+---
+
+## 024 — New tests written from assumptions became blockers under Rule 8
+
+*2026-11-14 · player database PRs F, G, H*
+
+- **Symptom:** three new tests failed on their own defects, not on the app: a selector `has-text("Me")` that also matched "Biometrics", an expected text without the space the page renders, a workflow whose earlier steps used up the data a later step needed, and a TypeScript narrowing mistake in a unit test. Under Rule 8 each one had to go to the owner instead of being corrected, and two PRs stayed unmerged.
+- **Verified root cause:** the tests were written from what the page was expected to show, then run for the first time as the real check.
+- **Fix:** for the Mental workflow the page was explored first with a throwaway script (scratchpad, not committed), selectors and texts were taken from that run, the committed test was type-checked before its first run, and it passed all 26 checks on the first try.
+- **Class of mistake:** when a failing test can no longer be edited without approval, its first run is the only free one. Explore the real page with a scratch script, type-check, then write the test from what was observed.
+
+## 025 — A cross-origin frame under the site's COEP header renders blank
+
+**Symptom.** Timeline YouTube videos were empty grey boxes on phones (KNOWN_ISSUES 080).
+**Verified root cause.** `Cross-Origin-Embedder-Policy: credentialless` on every page blocks cross-origin frames in Chromium unless the frame has the `credentialless` attribute; the timeline frame was a plain `<iframe>`.
+**Fix.** Reuse `components/reports/VideoBlock.tsx` (marks the frame, always shows a "Watch on YouTube" link).
+**Class of mistake.** Writing a new embed instead of reusing the one that already encodes a platform constraint. Any new `<iframe>` in this app must go through `VideoBlock` (or set `credentialless`), and a browser check must load it against a stub without COEP headers: a blocked frame fires no error, so nothing else catches it.
+
+## 026 — A fixture that cannot show the bug, and a reference the bug itself biases
+
+**Symptom.** Tests written for the limb-swap fix (KNOWN_ISSUES 081) failed: the leg cases asked a length-based rule to detect a swap of mirror-symmetric legs (no length changes, valid skeleton), and a "genuine crossing" fixture did not cross anything.
+**Verified root cause.** (1) Wrote tests from the assumption that any swap is detectable, without measuring the corrupted data first (same class as LESSONS 024). (2) The first fix used a reference length from the clip's own best assignment; when limbs are genuinely crossed on every frame that reference is biased low and the correct pose looks "too long": 90 and 40 false repairs, caught only because a test with a genuine-crossing fixture existed.
+**Fix.** Measure the ratios first; use a ruler a swap cannot bias (the bone above, same frame); realistic wide-stance fixtures for the legs.
+**Class of mistake.** A detector validated only on the corruption it should catch, never on the genuine look-alike it must leave alone. Every "repair" rule needs a false-positive fixture written from the legitimate case.

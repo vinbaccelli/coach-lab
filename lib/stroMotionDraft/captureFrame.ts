@@ -117,6 +117,8 @@ export function waitForDecodableFrame(
 export async function captureFrameFromElement(
   video: HTMLVideoElement,
   timeSec: number,
+  /** Phone memory budget only (phoneBudget.ts): capture at this size instead of native. */
+  size?: { w: number; h: number },
 ): Promise<ImageBitmap> {
   // Gate before pausing/seeking: duration is NaN and 'seeked' never fires while
   // the element is still at readyState 0.
@@ -150,8 +152,28 @@ export async function captureFrameFromElement(
   // never completed, so re-confirm readiness here. No-op when already ready.
   await waitForDecodableFrame(video);
 
-  const bitmap = await normalizedFrameBitmap(video);
+  const bitmap = size ? await scaledFrameBitmap(video, size) : await normalizedFrameBitmap(video);
   if (wasPlaying) void video.play().catch(() => {});
+  return bitmap;
+}
+
+/**
+ * A frame drawn straight to a smaller canvas, so the native-resolution bitmap is
+ * never created (a 4K frame is 31.6 MiB). Portable: no `createImageBitmap` resize
+ * options, which older WebKit lacks. `drawImage(video, …)` applies the same display
+ * correction the element uses on screen.
+ */
+async function scaledFrameBitmap(video: HTMLVideoElement, size: { w: number; h: number }): Promise<ImageBitmap> {
+  const scratch = document.createElement('canvas');
+  scratch.width = size.w;
+  scratch.height = size.h;
+  const ctx = scratch.getContext('2d');
+  if (!ctx) return normalizedFrameBitmap(video);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(video, 0, 0, size.w, size.h);
+  const bitmap = await createImageBitmap(scratch);
+  scratch.width = 0;
+  scratch.height = 0;
   return bitmap;
 }
 
