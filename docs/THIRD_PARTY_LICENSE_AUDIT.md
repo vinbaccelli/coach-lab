@@ -123,7 +123,7 @@ Fields per row: model/version · author · exact download location (as far as pr
 - A hosted API used for the match decoder; governed by Google's API terms (not read here). Listed so the inventory is complete. **Status: Pending legal review.** Open: G-1 terms, data-processing and attribution requirements.
 
 ### B.16 Models/weights considered but **not** shipped
-- MobileSAM: investigation paused; **no MobileSAM file or code is added by this PR**.
+- **MobileSAM** (Acly ONNX conversion of `dhkim2810/MobileSAM`) — dossier: [`MOBILESAM.md`](MOBILESAM.md). **Status: Pending legal review; integration paused.** Not shipped; no MobileSAM file or code is added by this PR. Files evaluated: `mobile_sam_image_encoder.onnx` sha256 `580f5fb6…0cc749`, `sam_mask_decoder_multi.onnx` sha256 `8976b90a…2ffe`, from HF `Acly/MobileSAM` @ `0d3b4033…` (both repos tagged MIT, no LICENSE file; official code repo Apache-2.0). Open questions: `MOBILESAM.md` §2 (1–8).
 - Human-Art YOLOX-tiny detector: removed earlier (`docs/RTMPOSE_LICENCE.md`).
 
 ---
@@ -149,3 +149,4 @@ No model is replaced, removed or swapped until the owner has recorded a decision
 | date | change | by |
 |---|---|---|
 | 2026-11-24 | Register created: SAM 2 audit, full model inventory, process, evidence preserved, `THIRD_PARTY_NOTICES.md` generated. No code or model changes. | licensing review (assistant), awaiting counsel |
+| 2026-11-24 | MobileSAM dossier + evidence added; register entry (Pending legal review, integration paused). No code or model changes. | licensing review (assistant), awaiting counsel |

@@ -26,6 +26,13 @@ Licence files and model-card metadata **as read**, saved because web pages chang
 | `tessdata-github-LICENSE.txt` | https://raw.githubusercontent.com/tesseract-ocr/tessdata/main/LICENSE | 2026-11-24 | default branch, commit not readable | `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30` |
 | `npm-ffmpeg-core-license-metadata.json` | https://registry.npmjs.org/@ffmpeg/core (license + repository fields per version only, extracted) | 2026-11-24 | versions 0.12.6 (MIT), 0.12.8/0.12.9/0.12.10 (GPL-2.0-or-later) | `eb9be9dd08422cb992f7eb661b47088e48c9b2949ebc52c3412fae1ddea92473` |
 | `npm-mediabunny-LICENSE.txt` | node_modules/mediabunny/LICENSE (installed 1.65.2, MPL-2.0) | 2026-11-24 | package 1.65.2 | `3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04` |
+| `mobilesam-github-LICENSE.txt` | https://raw.githubusercontent.com/ChaoningZhang/MobileSAM/master/LICENSE | 2026-11-24 (first read 2026-11-23) | default branch, commit not readable | `c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4` |
+| `mobilesam-github-README-excerpt.txt` | https://raw.githubusercontent.com/ChaoningZhang/MobileSAM/master/README.md (lines 1-12, 30-34, 159-168) | 2026-11-24 (first read 2026-11-23) | default branch, commit not readable | `6657a6cf6464aa09f07ba5b461817c9973865259fbf7ebd4cbf26c3475656891` |
+| `mobilesam-github-export-script-header.txt` | https://raw.githubusercontent.com/ChaoningZhang/MobileSAM/master/scripts/export_onnx_model.py (lines 1-8) | 2026-11-24 (first read 2026-11-23) | default branch, commit not readable | `c1151792989b0367d08e6b4bcf39018211ba560f35b043f8b909a71e514c55e8` |
+| `mobilesam-hf-dhkim2810-api.json` | https://huggingface.co/api/models/dhkim2810/MobileSAM?blobs=true | 2026-11-24 (first read 2026-11-23) | rev 4e2e5245fe9dc63096d575d36e70eb39b03b3aba | `2cfef8a9e89ea1eb2ae1034a601e8e35208a51e51b25cb6eaf4885a1906c5def` |
+| `mobilesam-hf-dhkim2810-README.md` | https://huggingface.co/dhkim2810/MobileSAM/raw/main/README.md | 2026-11-24 (first read 2026-11-23) | main @ 4e2e5245… (YAML header: license: mit) | `2837a97d5a364b1c4a956a488682449f46ad1ab674c0c3acdd028483751cf810` |
+| `mobilesam-hf-Acly-api.json` | https://huggingface.co/api/models/Acly/MobileSAM?blobs=true | 2026-11-24 (first read 2026-11-23) | rev 0d3b403339b4674a82493d5e97964dd78089ddc8 | `9971b92c83939ccc9578ef7948fae2a1f175b1fb19ac565dd7a7ae53ff22d8e2` |
+| `mobilesam-hf-Acly-README.md` | https://huggingface.co/Acly/MobileSAM/raw/main/README.md | 2026-11-24 (first read 2026-11-23) | main @ 0d3b4033… (YAML header: license: mit) | `9f65cf87488ad1a3c8b191ac9fd5a8ce04b999810bfc7d1a2625750edb969c56` |
 
 ## Shipped-file hashes (computed 2026-11-24 from the repository working tree at `origin/main`)
 
