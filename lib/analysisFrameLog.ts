@@ -18,6 +18,8 @@ export function watchPassFrames(
   log: (line: string) => void,
   every = 10,
   now: () => number = () => performance.now(),
+  /** Also log the first N seeks (default 0 = only every `every`-th): the start of a track, KNOWN_ISSUES 076. */
+  firstSeeks = 0,
 ): () => void {
   const t0 = now();
   let seeks = 0;
@@ -25,7 +27,7 @@ export function watchPassFrames(
   let stopped = false;
   const onSeeked = () => {
     seeks++;
-    if (seeks % every !== 0) return;
+    if (seeks > firstSeeks && seeks % every !== 0) return;
     const n = seeks;
     const t = video.currentTime;
     const wall = now();

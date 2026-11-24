@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import {
   PLANS, NO_PRICES, getPlan, formatPrice, formatMaybePrice, planPrice, yearlyPerMonth, yearlySavingsPct,
   yearlySavingsLabel, maxYearlySavingsPct, yearlySavingsSentence, PRICE_TAX_NOTE, EBOOK_TITLE, type PlanPrices,
+  planBonusLines, YEARLY_BONUS_COPY, YEARLY_BONUS_TEXT, PRICING_SUBHEAD,
 } from '@/lib/plans';
+import { readFileSync } from 'node:fs';
+import { canDownloadEbook, NO_ENTITLEMENT } from '@/lib/entitlements';
+import { REPORTS_IN_APP } from '@/lib/featureFlags';
 
 // The live Stripe amounts at launch, as lib/billing/livePrices.ts returns them.
 const LAUNCH: PlanPrices = {
@@ -64,4 +68,45 @@ test('copy rules: tax line, no VAT claim, no 13+, no "on every plan"', () => {
   assert.equal(PRICE_TAX_NOTE, 'Prices are final: no extra taxes at checkout.');
   const all = JSON.stringify(PLANS);
   assert.doesNotMatch(all, /VAT|13\+|on every plan|founding|OnForm|CoachNow|Dartfish|\$/i);
+});
+
+// ── Pricing offers copy (ebook emphasis, yearly bonus behind a flag) ───────────
+
+test('planBonusLines: yearly shows the ebook line on Pro and Academy only; monthly shows only the switch-to-yearly hint', () => {
+  for (const id of ['pro', 'academy'] as const) {
+    const plan = getPlan(id)!;
+    assert.deepEqual(planBonusLines(plan, true), [plan.yearlyBonus]);
+    assert.deepEqual(planBonusLines(plan, false), [plan.ebookHint]);
+    assert.match(plan.ebookHint ?? '', new RegExp(`yearly.*${EBOOK_TITLE}`, 'i'));
+  }
+  const light = getPlan('light')!;
+  assert.deepEqual(planBonusLines(light, true), []);
+  assert.deepEqual(planBonusLines(light, false), []);
+});
+
+test('planBonusLines: the extra-month line is OFF by default and, when on, only on the yearly cycle', () => {
+  assert.equal(YEARLY_BONUS_COPY, false, 'stays off until the Stripe side exists and Vin confirms the wording');
+  for (const p of PLANS) assert.ok(!planBonusLines(p, true).includes(YEARLY_BONUS_TEXT), `${p.id} default`);
+  for (const p of PLANS) {
+    assert.ok(planBonusLines(p, true, { yearlyBonusCopy: true }).includes(YEARLY_BONUS_TEXT), `${p.id} yearly on`);
+    assert.ok(!planBonusLines(p, false, { yearlyBonusCopy: true }).includes(YEARLY_BONUS_TEXT), `${p.id} monthly never`);
+  }
+  assert.doesNotMatch(JSON.stringify(PLANS), /extra month/i, 'not baked into the plan data');
+});
+
+test('the ebook promise in the copy matches who can download it', () => {
+  const yearly = (plan: 'light' | 'pro' | 'academy') => ({ ...NO_ENTITLEMENT, plan, interval: 'year' as const });
+  assert.equal(canDownloadEbook(yearly('pro')), true);
+  assert.equal(canDownloadEbook(yearly('academy')), true);
+  assert.equal(canDownloadEbook(yearly('light')), false);
+  assert.equal(canDownloadEbook({ ...yearly('pro'), interval: 'month' }), false);
+  for (const p of PLANS) assert.equal(Boolean(p.yearlyBonus), p.id !== 'light', p.id);
+});
+
+test('both pricing surfaces use the same bonus function and the subhead matches where reports live', () => {
+  for (const file of ['app/pricing/PricingClient.tsx', 'components/LandingPage.tsx']) {
+    assert.match(readFileSync(file, 'utf8'), /planBonusLines\(plan, annual\)/, file);
+  }
+  assert.doesNotMatch(readFileSync('components/LandingPage.tsx', 'utf8'), /YEARLY_BONUS_COPY \? [^`]*Google/);
+  assert.equal(PRICING_SUBHEAD.includes('Google Docs'), !REPORTS_IN_APP, 'subhead follows REPORTS_IN_APP');
 });

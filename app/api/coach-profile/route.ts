@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getRouteSession } from '@/lib/auth/routeSession';
 import { requireFeature } from '@/lib/entitlements.server';
+import { sanitizeSubscriptionOffer } from '@/lib/analysisPricing';
 
 /** Generous, but small enough that an accidental paste of a document is caught. */
 const MAX_BIO_CHARS = 4000;
@@ -186,6 +187,22 @@ export async function PUT(req: Request) {
         sort_order: i,
       })));
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  /* Analysis subscription offer (docs/ANALYSIS_SUBSCRIPTIONS_PLAN.md). Written in its own update and
+     only when the editor sent it, so a database that has not got the column yet never breaks the
+     rest of the profile save. Sanitised here: the browser is not trusted. */
+  if (body.subscription !== undefined) {
+    const { error } = await session.supabase
+      .from('coach_profiles')
+      .update({ subscription_offer: sanitizeSubscriptionOffer(body.subscription) })
+      .eq('id', profileId);
+    if (error) {
+      return NextResponse.json(
+        { error: `Saved your profile, but the subscription options could not be saved: ${error.message}` },
+        { status: 500 },
+      );
+    }
   }
 
   return NextResponse.json({ ok: true, profileId });

@@ -1,6 +1,5 @@
 'use client';
 
-import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 
 /**
  * FLAGS for AUTO-RACKET detection (D-FINE → SAM-2).
@@ -44,6 +43,12 @@ export function autoRacketEnabled(objectType: string): boolean {
   const w = window as unknown as Record<string, unknown>;
   if (w.__autoRacket === true) return true;
   if (w.__autoRacket === false) return false;
+  // Link switch for phone testing (no console on a phone): …/analysis?racket=1 turns it ON, ?racket=0 OFF,
+  // and the choice is remembered in localStorage like the manual setting below.
+  try {
+    const q = new URLSearchParams(window.location.search).get('racket');
+    if (q === '1' || q === '0') window.localStorage.setItem('autoRacket', q);
+  } catch { /* no URL / storage blocked */ }
   let stored: string | null = null;
   try {
     stored = window.localStorage.getItem('autoRacket');
@@ -52,10 +57,15 @@ export function autoRacketEnabled(objectType: string): boolean {
   }
   if (stored === '1') return true;
   if (stored === '0') return false;
-  // PHONES: OFF unless asked for above. The racket pass loads D-FINE and SAM-2 (about +1 GB of
-  // wasm heap that is not returned) and the phone ends the page during it; the same clip
-  // finishes with the pass off (docs/PHONE_REFRESH_AFTER_AUTODETECT.md §8). Opt back in with
-  // localStorage 'autoRacket' = '1' or window.__autoRacket = true.
-  if (isPhoneBudgetActive()) return false;
+  // PHONES: ON like everywhere else. The pass runs D-FINE and SAM-2 in workers that are terminated after use (a fresh SAM worker per
+  // frame), and "racket detection stays" is the product rule. The safety net remains: a phone that is killed mid-pass stores
+  // autoRacket='0' and shows the notice, and ?racket=1 / ?racket=0 / localStorage still override.
   return IMPLEMENT_MODES.has(objectType);
+}
+
+/** Persist the coach's explicit choice from the Auto Detect panel switch (same key the flag reads, so the pass obeys it). */
+export function setAutoRacketPreference(on: boolean): void {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.setItem('autoRacket', on ? '1' : '0'); } catch { /* private mode: the in-memory switch still shows the choice for this session */ }
+  (window as unknown as Record<string, unknown>).__autoRacket = on;
 }

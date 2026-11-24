@@ -82,13 +82,13 @@ test('kill marker: finished clears every store; a blocked store never throws', (
   assert.equal(combineStorages([null, null]), null);
 });
 
-test('wiring: marker starts at the click, stages at every phase, COCO warm-up sequenced on phones only', () => {
+test('wiring: marker starts at the click, stages at every phase, no COCO warm-up on phones', () => {
   const page = readFileSync('app/analysis/page.tsx', 'utf8');
   assert.match(page, /const phoneRun = isPhoneBudgetActive\(\);\n\s+if \(phoneRun\) \{ markAutoDetectStarted\(\);/);
   assert.match(page, /phoneHeld = ok > 0;/);
   assert.match(page, /if \(phoneRun && !phoneHeld\) markAutoDetectFinished\(\);/);
   assert.match(page, /if \(!isPhoneBudgetActive\(\)\) \{\n\s+void import\('@\/lib\/racketCocoDetect'\)\.then\(\(m\) => m\.preloadRacketDetector\(\)\);\n\s+return;/);
-  assert.match(page, /while \(!cancelled && stroAutoSelectBusyRef\.current\) await sleep\(1000\);/);
+  assert.doesNotMatch(page, /Motion Layer: loading the racket-tool detector/); // phones no longer warm COCO-SSD up when Motion Layer opens
   assert.match(page, /PREPARING_MOTION_LAYER_TEXT/);
   const hook = readFileSync('hooks/useStroMotion.ts', 'utf8');
   for (const needle of ['foot pose, frame', 'racket detector (loading', 'removing background, frame', 'racket segmentation (loading', 'committing frames', 'native-size finalize']) {

@@ -119,12 +119,13 @@ export const FEATURES = {
   snapshot:          { plan: 'light', enforced: 'client', label: 'One snapshot' },
   screenshot:        { plan: 'light', enforced: 'client', label: 'Screenshots' },
   academy:           { plan: 'light', enforced: 'server', label: 'AngleMotion Academy' },
+  // Player database: Light and up (Vin, 2026-11-02). Every paid plan can keep players.
+  players:           { plan: 'light', enforced: 'server', label: 'Player database' },
+  saveToPlayer:      { plan: 'light', enforced: 'server', label: 'Save to player' },
   // Pro
   recordingHub:      { plan: 'pro', enforced: 'client', label: 'Recording Hub' },
   motionLayer:       { plan: 'pro', enforced: 'client', label: 'Motion Layer' },
   youtube:           { plan: 'pro', enforced: 'server', label: 'YouTube upload' },
-  players:           { plan: 'pro', enforced: 'server', label: 'Player database' },
-  saveToPlayer:      { plan: 'pro', enforced: 'server', label: 'Save to player' },
   aiTrack:           { plan: 'pro', enforced: 'client', label: 'AI Track' },
   generate:          { plan: 'pro', enforced: 'client', label: 'Generate' },
   multiSnapshot:     { plan: 'pro', enforced: 'client', label: 'Multi-phase snapshots' },

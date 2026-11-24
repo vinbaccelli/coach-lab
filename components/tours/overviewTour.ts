@@ -31,8 +31,8 @@ export const OVERVIEW_TOUR: TourDef = {
       id: 'players',
       title: 'Player database',
       body: REPORTS_IN_APP
-        ? 'One profile per player: their analysis sessions, screenshots and video links, and two reports that grow all season, Technical analysis and Match analysis. Part of Pro and Academy.'
-        : 'One profile per player: their analysis sessions, screenshots and video links, and two Google Docs that grow all season, Technical Analysis and Match Analysis. Part of Pro and Academy.',
+        ? 'One profile per player: their analysis sessions, screenshots and video links, and two reports that grow all season, Technical analysis and Match analysis. Included in every plan.'
+        : 'One profile per player: their analysis sessions, screenshots and video links, and two Google Docs that grow all season, Technical Analysis and Match Analysis. Included in every plan.',
       target: 'cp-players',
       advance: { kind: 'next' },
       image: shot('overview', 'players', 300, 'The Players screen: a New player box with an Add button, and a grid of player cards.'),

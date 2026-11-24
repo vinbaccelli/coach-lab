@@ -70,5 +70,5 @@ export function usePlayerReports(playerId: string) {
 
   const reports: Report[] = useMemo(() => groupEntriesIntoReports(entries), [entries]);
 
-  return { playerName, reports, loading, error, notFound, reload: load };
+  return { playerName, reports, entries, loading, error, notFound, reload: load };
 }

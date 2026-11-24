@@ -54,7 +54,8 @@ export function isPhoneEnv(env: PhoneEnv): boolean {
 }
 
 export function isPhoneBudgetActive(): boolean {
-  if (typeof window === 'undefined') return false;
+  // Inside a worker there is no window: the worker is told once at init (racketWorker.ts sets this global).
+  if (typeof window === 'undefined') return (globalThis as { __stroPhoneBudget?: unknown }).__stroPhoneBudget === true;
   let stored: string | null = null;
   try { stored = window.localStorage.getItem('stroPhoneBudget'); } catch { /* storage blocked */ }
   const w = window as unknown as Record<string, unknown>;
@@ -121,6 +122,14 @@ export const AUTODETECT_MARKER_KEY = 'anglemotion:autodetect-in-progress';
 export const AUTODETECT_MARKER_MAX_AGE_MS = 30 * 60 * 1000;
 export const AUTODETECT_KILLED_NOTICE =
   "Auto-detect was stopped by your phone's memory. Close other tabs and apps, then run it again.";
+
+export const AUTODETECT_KILLED_RACKET_NOTICE =
+  "Auto-detect was stopped by your phone's memory. Racket detection (about 1 GB more) was switched off; turn it on again only after closing other tabs and apps.";
+
+/** The notice to show after a kill: it says so when Racket detection was on and has been switched off. */
+export function killedNotice(racketWasOn: boolean): string {
+  return racketWasOn ? AUTODETECT_KILLED_RACKET_NOTICE : AUTODETECT_KILLED_NOTICE;
+}
 
 interface MarkerStorage {
   getItem(k: string): string | null;

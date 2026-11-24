@@ -8,8 +8,9 @@ import React, {
   useState,
 } from 'react';
 import type { ToolType, DrawingOptions } from '@/lib/drawingTools';
-import { calcAngleDeg, arrowBearingDeg, arrowHeadGeometry, arrowHeadLength, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
+import { calcAngleDeg, arrowBearingDeg, clampColumnPos, dataColumnHit, arrowHeadGeometry, arrowHeadLength, ARROW_HEAD, swingPathVisibleAt, type ArrowHeadGeometry } from '@/lib/drawingTools';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
+import { computeSkeletonAngles, formatAngleValue } from '@/lib/skeletonAngles';
 import { emitTourSignal, reportTourState } from '@/lib/tourSignals';
 import type { BallPosition } from '@/lib/ballDetection';
 import type { BallTrailMode, WebcamPipMode } from '@/components/ToolPalette';
@@ -25,15 +26,25 @@ import {
 } from '@/lib/youtubeThumbnailPose';
 import { WebcamSegmenter } from '@/lib/webcamSegmentation';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
-import { PoseWorkerBridge, type PoseResultMeta } from '@/lib/poseWorkerBridge';
+import { PoseWorkerBridge, terminateGlobalPoseWorker, type PoseResultMeta } from '@/lib/poseWorkerBridge';
 import { poseDbg } from '@/lib/tempDebugPose'; // TEMP-DEBUG-POSE
+import { counterZoomScale } from '@/lib/precisionCursorScale';
+import { constantSizeContext, getMarkScale, setMarkScale } from '@/lib/markScale';
+import { PRECISION_HOLD_MS as _PRECISION_HOLD_MS, PRECISION_HOLD_SLOP_PX as _PRECISION_HOLD_SLOP_PX, PRECISION_HOLD_MAX_TRAVEL_PX as _PRECISION_HOLD_MAX_TRAVEL_PX, DoubleTapDetector as _DoubleTapDetector } from '@/lib/precisionHold';
 import { getPoseDetector } from '@/lib/poseDetection';
-import { smoothBakedTrack } from '@/lib/trackSmoothing';
+import { refineBakedTrack, isLegacySkeleton } from '@/lib/skeletonRefine';
+import { continuePose } from '@/lib/liveDisplay';
+import { AheadBuffer, LookAheadVideo, leadSeconds, lookAheadDisabled, sampleHiddenNow, coverageDegraded, type AheadKp } from '@/lib/lookAheadPose';
+import { modeLabel, lookAheadDecodeOnly, lookAheadLeadOverride, liveEngineSwitch } from '@/lib/skeletonSwitches';
 import { poseBox, splitAtGaps, type LockTarget } from '@/lib/aiTrackLock';
 import { eraseUnderRing } from '@/lib/eraser';
-import { overlayTransform, type VideoBox } from '@/lib/exportOverlay';
-import { HelpCircle } from 'lucide-react';
-import { renderStroMotionComposite, exportStroMotionVideo, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
+import { liveColumnRows, overlayTransform, type ColumnRow, type VideoBox } from '@/lib/exportOverlay';
+import { HelpCircle, Hand } from 'lucide-react';
+import { renderStroMotionComposite, exportStroMotionVideo, pickStroVideoMime, canvasSupportsVideoExport, temporalGhostOpacity, hashCanvasContent, recordExportParity, setStroMotionPreviewHash, type StroMotionResult, type StroMotionSubjectBox } from '@/lib/stroMotion';
+import { recordStage } from '@/lib/restartBreadcrumb';
+import { buildMedianBackgroundPlate } from '@/lib/stroMotionDraft/backgroundPlate';
+import { createLiveOcclusion, type LiveOcclusionBuilder } from '@/lib/stroMotionDraft/liveOcclusionCanvas';
+import { createFixedFpsEncoder, exportSize } from '@/lib/stroMotionDraft/fixedFpsEncoder';
 import { renderStroMotionDraftComposite, captureVideoFrameAtTime, type StroMotionDraft } from '@/lib/stroMotionDraft';
 import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 import { PhoneFirstComposite } from '@/lib/stroMotionDraft/phoneFinalize';
@@ -106,8 +117,8 @@ const PRECISION_CURSOR_OFFSET_RATIO = 0.12;
  * feature looked completely dead while the pointerdown handler was in fact
  * still willing to erase. One list, used everywhere.
  */
-/** Still-hold duration (ms) that activates precision mode without the toolbar. */
-const PRECISION_HOLD_MS = 2000;
+/** Still-hold duration (ms) that activates precision mode without the toolbar (one definition: lib/precisionHold.ts). */
+const PRECISION_HOLD_MS = _PRECISION_HOLD_MS;
 /**
  * Travel BETWEEN CONSECUTIVE MOVE SAMPLES that cancels the hold — past this the
  * finger is stroking, not holding.
@@ -122,7 +133,7 @@ const PRECISION_HOLD_MS = 2000;
  * the full 2.4s all silently failed — with the finger motionless afterwards in
  * every one of those cases.
  */
-const PRECISION_HOLD_SLOP_PX = 10;
+const PRECISION_HOLD_SLOP_PX = _PRECISION_HOLD_SLOP_PX;
 /**
  * Total travel from the press origin that cancels the hold regardless of how
  * slowly it accumulated. Without this, re-anchoring per sample would let an
@@ -130,7 +141,7 @@ const PRECISION_HOLD_SLOP_PX = 10;
  * tap-target size used throughout this UI — about a fingertip, comfortably
  * above any settle and far below a real mark.
  */
-const PRECISION_HOLD_MAX_TRAVEL_PX = 44;
+const PRECISION_HOLD_MAX_TRAVEL_PX = _PRECISION_HOLD_MAX_TRAVEL_PX;
 /**
  * Tools where a 2-second still hold arms precision mode. Drawing tools only:
  * holding still over a pan, zoom, skeleton-focus or region-select gesture means
@@ -222,7 +233,7 @@ interface StrokeTriangle {
 }
 interface StrokeSwing   {
   tool: 'swingPath' | 'manualSwing';
-  pts: Pt[]; color: string; lw: number; dashed?: boolean; arrowAtEnd?: boolean; spinning?: boolean;
+  pts: Pt[]; color: string; lw: number; opacity?: number; dashed?: boolean; arrowAtEnd?: boolean; spinning?: boolean;
   /** Video time (s) of each click, parallel to `pts`: the path is drawn only between the first and the last (lib/drawingTools.ts swingPathVisibleAt). Absent on paths drawn before times were stored, and on sources with no video clock: always drawn, as before. */
   times?: number[];
 }
@@ -265,6 +276,8 @@ export interface ExportOverlayFrozen {
   drawingCount: number;
   readonly strokes: readonly unknown[];
   readonly angles: readonly unknown[];
+  /** The data column's place and size on screen at capture (fractions of the canvas, scale, canvas logical size). */
+  readonly column?: { x: number; y: number; scale: number; canvasW: number; canvasH: number };
 }
 
 export interface CanvasHandle {
@@ -373,7 +386,16 @@ export interface CanvasHandle {
         strokes: readonly unknown[];
         box: VideoBox | null;
         skeleton: ReadonlyArray<{ x: number; y: number; score: number; name: string }> | null;
+        /** Data column on: this snapshot's own rows and title (lib/exportOverlay.ts holdColumnRows). */
+        column?: readonly ColumnRow[];
+        columnTitle?: string;
       } | null;
+      /**
+       * Data column, OFF unless given (the export is then exactly as before). Normal frames:
+       * `ownRows` + the joint angles of the baked pose at that time (liveColumnRows), "—" where
+       * there is none. Drawn where the coach placed it on screen, kept inside the video.
+       */
+      dataColumn?: { ownRows: readonly ColumnRow[]; title: string } | null;
     },
   ) => ExportOverlayFrozen;
   /** Begin rubber-band region selection for StroMotion; callback receives region in video-normalized 0..1 coords, or null if cancelled/too small */
@@ -437,13 +459,15 @@ export interface CanvasProps {
   containerHeight: number;
   ballTrailMode?: BallTrailMode;
   skeletonEnabled?: boolean;
+  /** PHONES, while Motion Layer is open: stop the live skeleton's engines (MoveNet worker, RTMPose) and free their memory. They come back as MoveNet when it closes. */
+  parkLiveEngines?: boolean;
   ballTrailEnabled?: boolean;
   /** When false, skeleton pose may still run but overlay is not drawn. */
   skeletonDrawEnabled?: boolean;
   onProcessingStatus?: (msg: string | null) => void;
   onSkeletonFocusSet?: () => void;
   /** Called each frame with live skeleton angle values for the data column */
-  onSkeletonAnglesUpdate?: (angles: Array<{ label: string; deg: number }>) => void;
+  onSkeletonAnglesUpdate?: (angles: Array<{ label: string; deg: number | null }>) => void;
   /**
    * Step 1 Mode Guard: when false (snapshot/frame domain active), live pose
    * detection still feeds the time-indexed cache but must NOT write the
@@ -461,7 +485,7 @@ export interface CanvasProps {
   /** Called when a drawing measurement is committed (angle, ruler, etc.) */
   onMeasurementCommit?: (measurement: { type: 'angle' | 'ruler' | 'arrowAngle'; value: number; unit: string }) => void;
   /** Measurements to render in the right-side column overlay */
-  measurementColumnItems?: Array<{ id: string; label: string; value: number; unit: string }> | null;
+  measurementColumnItems?: Array<{ id: string; label: string; value: number | null; unit: string }> | null;
   /**
    * Header label for the data column. Reflects the locked owner: the phase
    * label in snapshot mode, "FRAME N" in frame mode, or "DATA COLUMN" when live.
@@ -542,6 +566,8 @@ export interface CanvasProps {
   stroMotionGhostOpacity?: number;
   /** Exported-video ghost timing: build-up / fade-behind / all-on. */
   stroMotionLayerMode?: 'appear' | 'vanish' | 'all';
+  /** Exported video: draw the ghost layers BEHIND the live player (needs a still camera), instead of over it. */
+  stroMotionLayersBehind?: boolean;
   /** End-frame bitmap — required when stroMotionBackground === 'end'. */
   stroMotionEndPlate?: ImageBitmap | null;
   /** Subject box preview before generate (video-normalized 0..1) */
@@ -560,6 +586,8 @@ export interface CanvasProps {
   skeletonShowHeadLine?: boolean;
   skeletonShowHeadDirection?: boolean;
   skeletonShowFootLine?: boolean;
+  /** AI Track's draw-only foot-line flag (baked tracks). Never used to pick the live pose model. */
+  aiTrackFootLines?: boolean;
   /**
    * Fired ONCE when live MediaPipe is engaged but this device cannot sustain it
    * (GPU delegate unavailable, or measured inference over the live budget), and
@@ -607,15 +635,28 @@ export interface CanvasProps {
    * prop round-trip.
    */
   onPrecisionHoldActivate?: () => void;
+  /** One-finger double-tap while precision drawing is on → turn precision drawing off. */
+  onPrecisionDeactivate?: () => void;
   /** Fires after a drawable shape is committed — parent opens toolbar draw-context mode. */
   onDrawCommitted?: () => void;
   poseFrameSkip?: number;
   /** When true, one-finger touch / click-drag pans the canvas instead of drawing */
   panModeEnabled?: boolean;
+  /** The hand toggle in the zoom controls: while on, a one-finger / mouse drag moves the video with ANY tool. */
+  handPanActive?: boolean;
+  onHandPanToggle?: () => void;
   /** Callback to toggle pan mode from the on-canvas UI */
   onPanModeToggle?: () => void;
   /** When true, render guided-tour ? at top of zoom cluster (analysis mobile/desktop). */
   showTourHelpInZoomCluster?: boolean;
+  /**
+   * Two videos are open (A and B): each pane is short, so the zoom buttons become one small column at the
+   * top-right of the pane (never the wide row used on a phone held sideways), without the extra
+   * "Reset zoom" pill and the tour help button.
+   */
+  compareMode?: boolean;
+  /** The AngleMotion mark on this canvas: normal, smaller (A of an A/B pair), or none (B of the pair: one mark is enough). */
+  watermarkMode?: 'full' | 'small' | 'off';
   /** Fires when a region is selected in objectMultiplier mode */
   onObjMultiplierRegionSelected?: () => void;
 }
@@ -1115,6 +1156,115 @@ function clipOutArrowHead(ctx: CanvasRenderingContext2D, g: ArrowHeadGeometry): 
   ctx.clip('evenodd');
 }
 
+/** The data column's base width (CSS px at scale 1). */
+const MC_BASE_W = 150;
+
+/** The data column's size for `n` rows at scale `s` (logical px). */
+function dataColumnSize(n: number, s: number): { w: number; h: number } {
+  const w = Math.round(MC_BASE_W * s);
+  const lineH = Math.round(22 * s);
+  return { w, h: n > 0 ? n * lineH + Math.round(28 * s) : Math.round(48 * s) };
+}
+
+/**
+ * Draw the data column at (mcX, mcY), scale `s`: the screen's column, and the generated
+ * video's (`handles` false: no drag dots / resize grip there). A row whose value is null
+ * (generated video, not computable for that frame) shows "—".
+ */
+function drawDataColumnBox(
+  ctx: CanvasRenderingContext2D,
+  mcItems: ReadonlyArray<{ label: string; value: number | null; unit: string }>,
+  title: string,
+  mcX: number,
+  mcY: number,
+  s: number,
+  handles: boolean,
+): void {
+  const { w: mcW, h: mcH } = dataColumnSize(mcItems.length, s);
+  const mcLineH = Math.round(22 * s);
+  const pad = Math.round(8 * s);
+  const hasItems = mcItems.length > 0;
+  const f = (px: number) => `${Math.round(px * s)}px`;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(mcX, mcY, mcW, mcH, 10);
+  else ctx.rect(mcX, mcY, mcW, mcH);
+  ctx.fill();
+
+  // Header — reflects the locked owner (phase / frame / live).
+  ctx.font = `bold ${f(10)} -apple-system, sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  const mcTitle = (title || 'DATA COLUMN').toUpperCase();
+  ctx.fillText(mcTitle.length > 22 ? mcTitle.slice(0, 21) + '…' : mcTitle, mcX + pad, mcY + Math.round(14 * s));
+
+  // Drag handle dots + resize knob: only while the column is selected (pressed) on the screen.
+  if (handles) {
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    for (let d = 0; d < 3; d++) ctx.fillRect(mcX + mcW - Math.round(18 * s) + d * Math.round(5 * s), mcY + Math.round(10 * s), 2, 2);
+  }
+
+  if (hasItems) {
+    for (let i = 0; i < mcItems.length; i++) {
+      const item = mcItems[i];
+      const y = mcY + Math.round(28 * s) + i * mcLineH;
+      if (item.value == null) {
+        // Not computable for this frame (generated video only): a dash, never a made-up number.
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = `${f(11)} -apple-system, sans-serif`;
+        ctx.fillText(item.label, mcX + pad, y);
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
+        ctx.fillText('—', mcX + mcW - pad - ctx.measureText('—').width, y);
+      } else if (item.value === 0 && !item.unit) {
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.font = `italic ${f(11)} -apple-system, sans-serif`;
+        ctx.fillText(item.label, mcX + pad, y);
+      } else if (item.unit === '' && item.value !== 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = `${f(11)} -apple-system, sans-serif`;
+        ctx.fillText(item.label, mcX + pad, y);
+        ctx.fillStyle = '#93C5FD';
+        ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
+        ctx.fillText(`${item.value}`, mcX + mcW - pad - ctx.measureText(`${item.value}`).width, y);
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = `${f(11)} -apple-system, sans-serif`;
+        ctx.fillText(item.label, mcX + pad, y);
+        ctx.fillStyle = '#93C5FD';
+        ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
+        const valText = formatAngleValue(item.value, item.unit);
+        ctx.fillText(valText, mcX + mcW - pad - ctx.measureText(valText).width, y);
+      }
+    }
+  } else {
+    ctx.font = `${f(11)} -apple-system, sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillText('Draw to add measurements', mcX + pad, mcY + Math.round(34 * s));
+  }
+
+  // Resize handle — bottom-right corner: a round knob (its touch area is 44 px,
+  // lib/drawingTools.ts dataColumnHit) with the diagonal grip lines.
+  if (handles) {
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.beginPath();
+    ctx.arc(mcX + mcW, mcY + mcH, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 1.5;
+    for (let g = 0; g < 2; g++) {
+      const off = 3 + g * 4;
+      ctx.beginPath();
+      ctx.moveTo(mcX + mcW - off, mcY + mcH + 3);
+      ctx.lineTo(mcX + mcW + 3, mcY + mcH - off);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+}
+
 function labelPill(ctx: CanvasRenderingContext2D, text: string, x: number, y: number): void {
   ctx.save();
   ctx.font = 'bold 12px Inter, sans-serif';
@@ -1179,7 +1329,7 @@ function drawSmoothPath(
   // Arrow at the end: the head of the last segment's direction (the path's final piece is
   // straight along it). The line stops at the head's base and the head's area is clipped
   // out of it, so nothing shows through the head.
-  const head = arrowAtEnd ? arrowHeadGeometry(points[n - 2], last, arrowHeadLength(width, 12, 3)) : null;
+  const head = arrowAtEnd ? arrowHeadGeometry(points[n - 2], last, arrowHeadLength(width, ARROW_HEAD.swing.min, ARROW_HEAD.swing.per) * getMarkScale()) : null;
   if (head) { ctx.save(); clipOutArrowHead(ctx, head); }
 
   ctx.beginPath();
@@ -1403,12 +1553,12 @@ function isContextualStrokeTool(tool: string): boolean {
  * Which committed strokes Style mode can actually restyle.
  *
  * Mirrors the early-outs inside applyContextualChange / buildContextualSnapshot:
- * text carries fontSize rather than lw (it has its own edit affordance), and the
- * swing paths are generated geometry. Selecting those would light up a selection
- * box whose controls then silently do nothing, so they are not selectable.
+ * text carries fontSize rather than lw (it has its own edit affordance). The swing
+ * paths carry colour, thickness, dash, opacity and pulse like any other mark and are
+ * restyled the same way (they used to be excluded, so they could not be picked).
  */
 function isStyleableStrokeTool(tool: string): boolean {
-  return tool !== 'text' && tool !== 'swingPath' && tool !== 'manualSwing';
+  return tool !== 'text';
 }
 
 type ContextualTarget =
@@ -1417,7 +1567,7 @@ type ContextualTarget =
 
 const DEFAULT_CONTEXTUAL_SNAPSHOT: ContextualStyleSnapshot = {
   color: '#FFFFFF',
-  lineWidth: 3,
+  lineWidth: 1,
   opacity: 1,
   dashed: false,
   spinning: false,
@@ -1459,9 +1609,18 @@ function clampPanToLetterbox(
   dy: number,
   dw: number,
   dh: number,
+  /** The hand toggle is on: the video may be dragged even when it is not zoomed in. */
+  free = false,
 ): { x: number; y: number } {
   if (zoom <= ZOOM_MIN + 0.001 || dw <= 1 || dh <= 1) {
-    return { x: 0, y: 0 };
+    if (!free || dw <= 1 || dh <= 1) return { x: 0, y: 0 };
+    // Not zoomed: any drag is allowed as long as a good part of the video stays in view.
+    const keepX = Math.min(dw, 120);
+    const keepY = Math.min(dh, 120);
+    return {
+      x: Math.max(keepX - (dx + dw), Math.min(W - keepX - dx, panX)),
+      y: Math.max(keepY - (dy + dh), Math.min(H - keepY - dy, panY)),
+    };
   }
 
   const clampAxis = (
@@ -1847,7 +2006,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, joi
 
   } else if (s.tool === 'swingPath' || s.tool === 'manualSwing') {
     const sw = s as StrokeSwing;
-    drawSmoothPath(ctx, sw.pts, sw.color, sw.lw, 1, sw.dashed ?? false, sw.arrowAtEnd === true, sw.spinning === true);
+    drawSmoothPath(ctx, sw.pts, sw.color, sw.lw, strokeOpacity(sw), sw.dashed ?? false, sw.arrowAtEnd === true, sw.spinning === true);
     ctx.restore();
     return;
 
@@ -1864,7 +2023,7 @@ function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, animFrame = 0, joi
     applyMarkDash(ctx, dashed, spinning, [3, 10], 20);
     // The line stops at the head's base, with the head's area clipped out of it, so it
     // never shows through or past the head (any width, opacity, dash, angle).
-    const head = arrowHeadGeometry(p1, p2, arrowHeadLength(lw, 14, 2));
+    const head = arrowHeadGeometry(p1, p2, arrowHeadLength(lw, ARROW_HEAD.arrow.min, ARROW_HEAD.arrow.per) * getMarkScale());
     if (!head) {
       drawThickSegmentWithEraser(ctx, p1.x, p1.y, p2.x, p2.y, eraserStrokes);
     } else if (head.shaftEnd) {
@@ -2218,6 +2377,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       containerHeight,
       ballTrailMode = 'comet',
       skeletonEnabled = false,
+      parkLiveEngines = false,
       skeletonDrawEnabled = true,
       ballTrailEnabled = false,
       onProcessingStatus,
@@ -2258,6 +2418,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       stroMotionVideoOrder = 'forward',
       stroMotionGhostOpacity,
       stroMotionLayerMode,
+      stroMotionLayersBehind = false,
       stroMotionEndPlate,
       stroMotionSubjectBox,
       stroMotionFrameStops,
@@ -2270,6 +2431,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // skeleton-enable" reset. This is only a fallback for a caller that omits
       // the prop entirely; page.tsx always passes an explicit value.
       skeletonShowFootLine = false,
+      aiTrackFootLines = false,
       onFootLineLiveUnsupported,
       skeletonClassicColors = true,
       skeletonParts,
@@ -2284,12 +2446,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       webcamPipBottomInsetPx = 0,
       precisionTouchDraw = false,
       onPrecisionHoldActivate,
+      onPrecisionDeactivate,
       onDrawCommitted,
       poseFrameSkip = 0,
       panModeEnabled = false,
+      handPanActive = false,
+      onHandPanToggle,
       onPanModeToggle,
       onObjMultiplierRegionSelected,
       showTourHelpInZoomCluster = false,
+      compareMode = false,
+      watermarkMode = 'full',
     },
     ref,
   ) {
@@ -2427,7 +2594,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      */
     const dockTopRef = useRef(0);
 
-    const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number; unit: string }> | null>(null);
+    const measurementColumnRef = useRef<Array<{ id: string; label: string; value: number | null; unit: string }> | null>(null);
     const mcPosRef = useRef<{ x: number; y: number }>({ x: 0.85, y: 0.02 });
     const mcTitleRef = useRef<string>(measurementColumnTitle);
     const mcDraggingRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
@@ -2435,12 +2602,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // bottom-right corner to resize; in-session only.
     const mcScaleRef = useRef<number>(1);
     const mcResizingRef = useRef<{ startX: number; startY: number; origScale: number } | null>(null);
+    /** The column was pressed (its header): drag dots + resize grip show, and the corner resizes. Any other press clears it. */
+    const mcSelectedRef = useRef(false);
+    // A press on the column body: a tap (no move) presses the row under it, a drag moves the column.
+    const mcTapRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
     const lastMcRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
     const columnDeleteModeRef = useRef(columnDeleteMode);
     useEffect(() => { columnDeleteModeRef.current = columnDeleteMode; }, [columnDeleteMode]);
     const onMeasurementItemDeleteRef = useRef(onMeasurementItemDelete);
     useEffect(() => { onMeasurementItemDeleteRef.current = onMeasurementItemDelete; }, [onMeasurementItemDelete]);
-    const MC_BASE_W = 150;
     const skeletonWaitingForClickRef = useRef(false);
     const skeletonKeepAliveRef = useRef(skeletonKeepAlive);
     useEffect(() => { skeletonKeepAliveRef.current = skeletonKeepAlive; }, [skeletonKeepAlive]);
@@ -2649,6 +2819,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     /** Live ref to the activation callback so the timer never closes over a stale prop. */
     const onPrecisionHoldActivateRef = useRef(onPrecisionHoldActivate);
     useEffect(() => { onPrecisionHoldActivateRef.current = onPrecisionHoldActivate; }, [onPrecisionHoldActivate]);
+    const onPrecisionDeactivateRef = useRef(onPrecisionDeactivate);
+    useEffect(() => { onPrecisionDeactivateRef.current = onPrecisionDeactivate; }, [onPrecisionDeactivate]);
+    const precisionTapRef = useRef(new _DoubleTapDetector());
     /**
      * In-flight 2s hold. `clientX/clientY` is the press ORIGIN (for the total
      * travel cap) and `lastX/lastY` is the most recent sample (for the per-move
@@ -2664,11 +2837,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     >(null);
 
     /** Drop any in-flight hold. Safe to call unconditionally. */
-    const cancelPrecisionHold = useCallback(() => {
+    const cancelPrecisionHold = useCallback((reason?: string) => {
       const h = precisionHoldRef.current;
       if (!h) return;
       clearTimeout(h.timer);
       precisionHoldRef.current = null;
+      if (reason) poseDbg.event(`precision hold (canvas) cancelled: ${reason}`); // TEMP-DEBUG-POSE
     }, []);
 
     /** Never leave a hold timer running past unmount. */
@@ -2767,7 +2941,37 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
      * detection or a cache restore). `kps` identifies it, so a snapshot, a baked
      * track or a restored pose written by anything else is never judged by it.
      */
-    const livePoseStampRef = useRef<{ kps: PoseKeypoint[]; t: number } | null>(null);
+    const livePoseStampRef = useRef<{ kps: PoseKeypoint[]; t: number; reqAt?: number } | null>(null);
+    const traceLastKpsRef = useRef<unknown>(null); // TEMP-DEBUG-POSE: the sample already counted as 'first drawn'
+    // Temporary rollback switch (localStorage anglemotion:skeleton-legacy=1, read once at mount): previous live display blend.
+    const legacyLiveDisplayRef = useRef(false);
+    useEffect(() => { legacyLiveDisplayRef.current = isLegacySkeleton(); }, []);
+    // LOOK-AHEAD live skeleton (lib/lookAheadPose.ts): a hidden second video kept one worker round trip ahead
+    // is what the pose bridge reads while the main video PLAYS; results are stored by video time and drawn when
+    // the playhead arrives. Off with the legacy switch or `anglemotion:lookahead-off=1` (read once at mount).
+    const aheadVideoRef = useRef<LookAheadVideo | null>(null);
+    const aheadBufRef = useRef(new AheadBuffer());
+    const aheadRttRef = useRef(120);
+    const aheadLogAtRef = useRef(0);
+    const aheadBlockedRef = useRef(false);
+    const skeletonPrepSinceRef = useRef(0); // when the 'Preparing the skeleton…' hint first showed (0 = not showing)
+    const aheadWatchdogRef = useRef<number | null>(null);
+    const aheadEnabledRef = useRef(false);
+    // Feasibility probe (?lookahead=decode / ?la_lead=): decode-only flag, lead override, gap end, per-tick counter, 2 s stats window.
+    // EXPERIMENT (?live=rtmpose-t|rtmpose-s): RTMPose drives the live skeleton. Default off; every other path is unchanged.
+    const rtmLiveRef = useRef<{ eng: import('@/lib/rtmpose/engine').RtmposeEngine | null; initP: Promise<boolean> | null; busy: boolean; failed: boolean; errs: number; lastT: number; smoother: import('@/lib/keypointSmooth').OneEuroKeypointSmoother | null; ms: number[]; since: number; n: number }>({ eng: null, initP: null, busy: false, failed: false, errs: 0, lastT: -1, smoother: null, ms: [], since: 0, n: 0 });
+    const aheadDecodeOnlyRef = useRef(false);
+    const aheadLeadOverrideRef = useRef<number | null>(null);
+    const aheadGapUntilRef = useRef(0);
+    const aheadSoftBlockRef = useRef(false); // a coverage release lasts until the next play; a main-video stall release lasts the session
+    const aheadTickRef = useRef(0);
+    const aheadStatsRef = useRef({ at: 0, dets: 0, draws: 0, hits: 0, dropped: 0, total: 0, startedAt: 0, totDraws: 0, totHits: 0 });
+    useEffect(() => {
+      aheadEnabledRef.current = !lookAheadDisabled();
+      aheadDecodeOnlyRef.current = lookAheadDecodeOnly();
+      aheadLeadOverrideRef.current = lookAheadLeadOverride();
+      poseDbg.event(modeLabel(aheadEnabledRef.current)); // TEMP-DEBUG-POSE: mode line
+    }, []);
     /** The pending post-seek request, for the debug panel (TEMP-DEBUG-POSE). */
     const seekRequestRef = useRef<{ t: number; at: number } | null>(null);
     /** Whether the live pose was hidden as stale on the previous frame (log transitions only). */
@@ -2894,6 +3098,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // Coach-facing ghost-layer timing mode for the exported video (see the
     // export loop). undefined → derive from videoOrder for back-compat.
     const stroMotionLayerModeRef = useRef<'appear' | 'vanish' | 'all' | undefined>(stroMotionLayerMode);
+    const stroMotionLayersBehindRef = useRef(stroMotionLayersBehind);
+    useEffect(() => { stroMotionLayersBehindRef.current = stroMotionLayersBehind; }, [stroMotionLayersBehind]);
+    // The live-player mask of the frame being recorded (export only; null = layers over the live frame).
+    const stroMotionBehindMaskRef = useRef<CanvasImageSource | null>(null);
     const stroMotionVisibleStartRef = useRef(0);
     const stroMotionEndPlateRef = useRef<ImageBitmap | null>(stroMotionEndPlate ?? null);
     // Overlay mode: ghost frames drawn over live video (no background plate). Used during video export.
@@ -2906,6 +3114,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const skeletonShowHeadLineRef = useRef(skeletonShowHeadLine);
     const skeletonShowHeadDirectionRef = useRef(skeletonShowHeadDirection);
     const skeletonShowFootLineRef = useRef(skeletonShowFootLine);
+    const aiTrackFootLinesRef = useRef(aiTrackFootLines);
+    /** DRAW only: foot arrows show for the live flag or AI Track's own flag. The live-engine choice (useMediaPipeLive / useRtmposeLive / the landmarker preload) reads ONLY skeletonShowFootLine. */
+    const footLinesDrawOn = () => skeletonShowFootLineRef.current || aiTrackFootLinesRef.current;
     const skeletonClassicColorsRef = useRef(skeletonClassicColors);
     const skeletonPartsRef = useRef(skeletonParts);
     const ballSampleModeRef = useRef(ballSampleMode);
@@ -2920,6 +3131,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     const suppressTabCaptureMirrorRef = useRef(false);
     const poseSmoothPrevRef = useRef<Array<{ x: number; y: number; score: number; name: string }> | null>(null);
     const poseScheduleRef = useRef<{ kind: 'rvfc' | 'raf'; id: number } | null>(null);
+    const watermarkModeRef = useRef(watermarkMode);
+    useEffect(() => { watermarkModeRef.current = watermarkMode; }, [watermarkMode]);
     const poseFrameSkipRef = useRef(poseFrameSkip);
     useEffect(() => { poseFrameSkipRef.current = poseFrameSkip; }, [poseFrameSkip]);
 
@@ -2938,6 +3151,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // the render loop composites at the webcam's fps instead of display rate.
     const webcamFrameDirtyRef = useRef(false);
     const panModeEnabledRef = useRef(panModeEnabled);
+    const handPanActiveRef = useRef(handPanActive);
     /** Pixel rect on the backing canvas; (0,0,0,0) means “use default lower-right” */
     const webcamPipRectRef = useRef({ x: 0, y: 0, w: 0, h: 0 });
     /** Stable identity for registerWebcamPipPresentation (see that prop). */
@@ -3120,7 +3334,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (!sel || (sel.kind !== 'stroke' && sel.kind !== 'angle')) return;
       if (sel.kind === 'stroke') {
         const raw = strokesRef.current[sel.idx];
-        if (!raw || raw.tool === 'text' || raw.tool === 'swingPath' || raw.tool === 'manualSwing') return;
+        if (!raw || raw.tool === 'text') return;
         const next = { ...(raw as StrokeLine), spinning: circleSpinning || undefined } as Stroke;
         strokesRef.current = [
           ...strokesRef.current.slice(0, sel.idx),
@@ -3161,6 +3375,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     useEffect(() => { skeletonShowHeadLineRef.current  = skeletonShowHeadLine; renderDirtyRef.current = true; },  [skeletonShowHeadLine]);
     useEffect(() => { skeletonShowHeadDirectionRef.current = skeletonShowHeadDirection; renderDirtyRef.current = true; }, [skeletonShowHeadDirection]);
     useEffect(() => { skeletonShowFootLineRef.current  = skeletonShowFootLine; renderDirtyRef.current = true; },  [skeletonShowFootLine]);
+    useEffect(() => { aiTrackFootLinesRef.current = aiTrackFootLines; renderDirtyRef.current = true; }, [aiTrackFootLines]);
     const onFootLineLiveUnsupportedRef = useRef(onFootLineLiveUnsupported);
     useEffect(() => { onFootLineLiveUnsupportedRef.current = onFootLineLiveUnsupported; }, [onFootLineLiveUnsupported]);
     /**
@@ -3260,6 +3475,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // stream is (re)attached when it remounts after cutout is turned off.
     }, [webcamActive, webcamVideoRef, webcamCutout]);
     useEffect(() => { panModeEnabledRef.current = panModeEnabled; }, [panModeEnabled]);
+    useEffect(() => { handPanActiveRef.current = handPanActive; }, [handPanActive]);
     useEffect(() => { onObjMultRegionSelectedRef.current = onObjMultiplierRegionSelected; }, [onObjMultiplierRegionSelected]);
 
     useEffect(() => {
@@ -3761,6 +3977,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const video = videoRef.current;
         if (!video || video.videoWidth === 0) return null;
         try {
+          // PHONE: do NOT start the tfjs/WebGL MoveNet here. Its WebGL backend and model hold ~+400 MB that is never returned, and a real
+          // iPhone 14 Pro was killed at the first frame of Auto-detect ("object detection, frame 1/5") by exactly this load. The MediaPipe
+          // full landmarker is already loaded for the foot pass, gives the same COCO-17 layout with named feet, and is the more accurate
+          // model. A frame it finds nobody on returns null, as before (the batch commits a fallback box). Desktop is unchanged.
+          if (isPhoneBudgetActive()) {
+            const { detectFullPoseOnBitmap } = await import('@/lib/mediapipePose');
+            const bmpPhone = frame ?? await captureVideoFrameAtTime(video, timeSec);
+            try {
+              const kps = await detectFullPoseOnBitmap(bmpPhone, video.videoWidth, video.videoHeight);
+              return kps?.length ? kps.map((k) => ({ x: k.x, y: k.y, score: k.score ?? 0, name: k.name ?? '' })) : null;
+            } finally {
+              if (!frame) { try { bmpPhone.close?.(); } catch { /* ok */ } }
+            }
+          }
           const { acquirePoseDetector, markDetectStart, markDetectEnd } = await import('@/lib/sharedPoseDetector');
           const det = await acquirePoseDetector();
           const bmp = frame ?? await captureVideoFrameAtTime(video, timeSec);
@@ -3850,7 +4080,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (opts?.splitGapSec !== undefined) {
           const segs = splitAtGaps(kept, opts.splitGapSec).filter((g) => g.length >= 2);
           if (!segs.length) return 0;
-          const made = segs.map((g) => ({ samples: smoothBakedTrack(g), start: g[0].t, end: g[g.length - 1].t, locked: opts.locked }));
+          const made = segs.map((g) => ({ samples: refineBakedTrack(g), start: g[0].t, end: g[g.length - 1].t, locked: opts.locked }));
           bakedTracksRef.current = [
             ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),
             ...made,
@@ -3860,7 +4090,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
         // Offline post-pass: outlier repair + centered (zero-lag) smoothing —
         // the precision live tracking can mathematically never reach.
-        const smoothed = smoothBakedTrack(kept);
+        const smoothed = refineBakedTrack(kept);
         // Add as a new tracked section, replacing any overlapping older track.
         bakedTracksRef.current = [
           ...bakedTracksRef.current.filter((b) => b.end < range.start - 0.05 || b.start > range.end + 0.05),
@@ -3917,6 +4147,22 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           drawingCount: strokesRef.current.length + angleMeasRef.current.length,
           strokes: [...strokesRef.current],
           angles: [...angleMeasRef.current],
+          column: {
+            x: mcPosRef.current.x, y: mcPosRef.current.y, scale: mcScaleRef.current,
+            canvasW: canvasRef.current ? cssW(canvasRef.current) : 0, canvasH: canvasRef.current ? cssH(canvasRef.current) : 0,
+          },
+        };
+        // The column in logical canvas px, where the coach put it on screen, kept inside `box`.
+        const drawColumn = (c: CanvasRenderingContext2D, box: VideoBox, rows: readonly ColumnRow[], title: string) => {
+          const col = frozen.column;
+          // Nothing to show (a snapshot with an empty column): no box, not the screen's "Draw to add" hint.
+          if (!rows.length || !col || !(col.canvasW > 0) || !(col.canvasH > 0)) return;
+          const { w, h } = dataColumnSize(rows.length, col.scale);
+          const sx = Math.round(Math.min(col.x * col.canvasW, col.canvasW - w - 4));
+          const sy = Math.round(Math.min(col.y * col.canvasH, col.canvasH - h - 4));
+          const x = Math.max(box.dx, Math.min(sx, box.dx + box.dw - w));
+          const y = Math.max(box.dy, Math.min(sy, box.dy + box.dh - h));
+          drawDataColumnBox(c, rows, title, x, y, col.scale, false);
         };
         if (ctx && opts.hold) {
           // Snapshot hold: its own strokes in its own box, its frozen pose. Read-only.
@@ -3936,10 +4182,14 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 showAngles: false,
                 showHeadLine: skeletonShowHeadLineRef.current,
                 showHeadDirection: skeletonShowHeadDirectionRef.current,
-                showFootLine: skeletonShowFootLineRef.current,
+                showFootLine: footLinesDrawOn(),
                 classicColors: skeletonClassicColorsRef.current,
                 parts: skeletonPartsRef.current,
               });
+            }
+            if (opts.dataColumn && hold.column) {
+              ctx.setTransform(htf.sx, 0, 0, htf.sy, htf.tx, htf.ty);
+              drawColumn(ctx, box, hold.column, hold.columnTitle ?? opts.dataColumn.title);
             }
           } catch (e) {
             if (process.env.NODE_ENV !== 'production') console.warn('[Canvas] export hold overlay skipped:', e);
@@ -3977,11 +4227,17 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 showAngles: false,
                 showHeadLine: skeletonShowHeadLineRef.current,
                 showHeadDirection: skeletonShowHeadDirectionRef.current,
-                showFootLine: skeletonShowFootLineRef.current,
+                showFootLine: footLinesDrawOn(),
                 classicColors: skeletonClassicColorsRef.current,
                 parts: skeletonPartsRef.current,
               });
             }
+          }
+          if (opts.dataColumn) {
+            // Values of the baked AI Track pose at this time (shared computeJointAngles, unchanged).
+            const pose = lookupBakedPose(mediaTime) ?? opts.livePose?.(mediaTime) ?? null;
+            ctx.setTransform(tf.sx, 0, 0, tf.sy, tf.tx, tf.ty);
+            drawColumn(ctx, frozen.box, liveColumnRows(opts.dataColumn.ownRows, pose), opts.dataColumn.title);
           }
         } catch (e) {
           // An overlay error must never stop the export: the video frame is already drawn.
@@ -4160,11 +4416,87 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const vh = draft.videoHeight || video.videoHeight;
         if (!vw || !vh) return { ok: false, reason: 'no-video-size' };
 
-        const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-          ? 'video/webm;codecs=vp9'
-          : MediaRecorder.isTypeSupported('video/webm')
-            ? 'video/webm'
-            : 'video/mp4';
+        // iOS: MP4 first (the Files app cannot open a WebM); elsewhere WebM first, as before. See pickStroVideoMime.
+        const mimeType = pickStroVideoMime((t) => MediaRecorder.isTypeSupported(t), navigator.userAgent);
+
+        // PREFERRED PATH: each step is drawn on an off-screen canvas of the VIDEO's size (1080p at most) and encoded with an exact
+        // timestamp, so the file is 1080p and plays at the planned 24 fps. The recorder path below filmed the on-screen canvas (a phone's
+        // pane, 660x1332, black bars included) and stamped frames with real time (about 7 fps). It stays as the fallback: no WebCodecs, no
+        // encodable codec, or any failure here, and also when the ghost skeletons are on (they are only drawn by the on-screen render).
+        const ghostSkeletonsOn = !!(stroMotionShowSkeletonRef.current && stroMotionResultRef.current?.ghostPoses?.length);
+        if (!ghostSkeletonsOn) {
+          const fixed = await (async () => {
+            const size = exportSize(vw, vh);
+            const off = document.createElement('canvas');
+            off.width = size.w;
+            off.height = size.h;
+            const octx = off.getContext('2d');
+            if (!octx) return null;
+            const enc = await createFixedFpsEncoder(off, { fps });
+            if (!enc) return null;
+            recordStage(`Motion Layer video: preparing (${size.w}x${size.h}, ${fps} fps, ${enc.codec})`);
+            let occ: LiveOcclusionBuilder | null = null;
+            if (stroMotionLayersBehindRef.current) {
+              try {
+                const plate = await buildMedianBackgroundPlate(video, startTime, endTime);
+                if (plate) occ = createLiveOcclusion(plate);
+              } catch { occ = null; }
+            }
+            try {
+              const layerMode = stroMotionLayerModeRef.current ?? (videoOrder === 'reverse' ? 'vanish' : 'appear');
+              for (let step = 0; step <= totalSteps; step++) {
+                const clampedT = Math.min(startTime + (step / totalSteps) * (endTime - startTime), endTime);
+                let liveBitmap: ImageBitmap | null = null;
+                try { liveBitmap = await captureVideoFrameAtTime(video, clampedT); } catch { liveBitmap = null; }
+                let visibleStart = 0;
+                let visibleCount: number;
+                if (layerMode === 'all') {
+                  visibleCount = sampleTimes.length;
+                } else if (layerMode === 'vanish') {
+                  visibleStart = sampleTimes.filter((st) => st <= clampedT - 0.001).length;
+                  visibleCount = sampleTimes.length;
+                } else {
+                  visibleCount = sampleTimes.filter((st) => st <= clampedT + 0.001).length;
+                }
+                octx.setTransform(1, 0, 0, 1, 0, 0);
+                octx.clearRect(0, 0, size.w, size.h);
+                renderStroMotionDraftComposite(octx, draft, {
+                  visibleCount,
+                  visibleStart,
+                  previewMode: !stroMotionUseExportMasksRef.current,
+                  dest: { x: 0, y: 0, w: size.w, h: size.h },
+                  background: liveBitmap ? 'end' : 'start',
+                  videoOrder: stroMotionVideoOrderRef.current,
+                  endPlate: liveBitmap,
+                  overlayMode: false,
+                  behindMask: liveBitmap && occ ? occ.maskFor(liveBitmap) : null,
+                  ...(stroMotionGhostOpacityRef.current !== undefined
+                    ? { fadeMode: 'uniform' as const, opacity: stroMotionGhostOpacityRef.current }
+                    : {}),
+                });
+                if (watermarkModeRef.current !== 'off') {
+                  drawVideoWatermark(octx, size.w, size.h, { x: 0, y: 0, w: size.w, h: size.h, scale: watermarkModeRef.current === 'small' ? 0.55 : 1 });
+                }
+                if (liveBitmap) { try { liveBitmap.close(); } catch { /* ok */ } }
+                if (step % 20 === 0) recordStage(`Motion Layer video: encoding step ${step}/${totalSteps}`);
+                await enc.addFrame();
+                await new Promise((resolve) => setTimeout(resolve, 0)); // let the page breathe between steps
+              }
+              await enc.hold(finalHoldMs / 1000);
+              recordStage('Motion Layer video: finishing the file');
+              const blob = await enc.finish();
+              recordStage(`Motion Layer video: ready (${Math.round(blob.size / 1e6)} MB, ${size.w}x${size.h})`);
+              return { ok: true as const, blob, url: URL.createObjectURL(blob) };
+            } catch (e) {
+              console.warn('[StroMotion] fixed-fps export failed, using the recorder:', e);
+              await enc.cancel();
+              return null;
+            } finally {
+              occ?.dispose();
+            }
+          })();
+          if (fixed) return fixed;
+        }
 
         // Off-screen composite canvas (matches video resolution)
         const offCanvas = document.createElement('canvas');
@@ -4181,6 +4513,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const savedEndPlate = stroMotionEndPlateRef.current;
         stroMotionCanvasPreviewRef.current = true;
         stroMotionOverlayModeRef.current = false; // use live bitmap as background plate
+        // The recorder films the MAIN canvas, which also paints the live skeleton overlay. Nothing updates it during this render loop, so the
+        // preview video carried a skeleton frozen in the middle of the picture (real iPhone, 2026-11-10). Hide it for the recording only.
+        const savedSkeletonSuppressed = skeletonSuppressedRef.current;
+        skeletonSuppressedRef.current = true;
 
         const waitRender = () => new Promise<void>((resolve) => {
           renderWaitersRef.current.push(resolve);
@@ -4199,8 +4535,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const chunks: Blob[] = [];
         recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 
+        // "Layers behind the player": the clean background of the section, to tell the live player from the rest of each frame.
+        recordStage('Motion Layer video: preparing');
+        let occlusion: LiveOcclusionBuilder | null = null;
+        if (stroMotionLayersBehindRef.current) {
+          try {
+            const plate = await buildMedianBackgroundPlate(video, startTime, endTime);
+            if (plate) occlusion = createLiveOcclusion(plate);
+          } catch { occlusion = null; }
+        }
+
         try {
-          recorder.start();
+          // The recorder starts only after step 0 is composited (below). Started here, it filmed whatever the canvas still showed (the
+          // preview's last picture: a second player at another zoom) as the video's first frame (real iPhone, 2026-11-22).
+          let recorderStarted = false;
 
           for (let step = 0; step <= totalSteps; step++) {
             const t = startTime + (step / totalSteps) * (endTime - startTime);
@@ -4245,9 +4593,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             }
             stroMotionVisibleCountRef.current = visibleCount;
             stroMotionVisibleStartRef.current = visibleStart;
+            stroMotionBehindMaskRef.current = liveBitmap && occlusion ? occlusion.maskFor(liveBitmap) : null;
 
+            if (step % 20 === 0) recordStage(`Motion Layer video: recording step ${step}/${totalSteps}`);
             await waitRender();
             await waitRender();
+            if (!recorderStarted) { recorder.start(); recorderStarted = true; }
             // Composite for this step is on the canvas — capture exactly one frame.
             emitFrame();
 
@@ -4267,20 +4618,25 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             await new Promise((resolve) => setTimeout(resolve, intervalMs));
           }
 
+          recordStage('Motion Layer video: finishing the recording');
           recorder.stop();
           await new Promise<void>((resolve) => { recorder.onstop = () => resolve(); });
 
           const blob = new Blob(chunks, { type: mimeType });
+          recordStage(`Motion Layer video: ready (${Math.round(blob.size / 1e6)} MB)`);
           const url = URL.createObjectURL(blob);
           return { ok: true, blob, url };
         } catch {
           return { ok: false, reason: 'record-failed' };
         } finally {
+          stroMotionBehindMaskRef.current = null;
+          occlusion?.dispose();
           stroMotionVisibleCountRef.current = savedVisible;
           stroMotionVisibleStartRef.current = 0;
           stroMotionCanvasPreviewRef.current = savedPreview;
           stroMotionOverlayModeRef.current = savedOverlay;
           stroMotionEndPlateRef.current = savedEndPlate;
+          skeletonSuppressedRef.current = savedSkeletonSuppressed;
           stroMotionBackgroundRef.current = stroMotionBackground; // restore from prop
           renderDirtyRef.current = true;
         }
@@ -4443,6 +4799,35 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // worker-vs-main-thread fallback internally; the render loop just calls
     // bridge.sendFrame(video) and receives keypoints via callback.
 
+    const parkLiveEnginesRef = useRef(parkLiveEngines);
+    parkLiveEnginesRef.current = parkLiveEngines;
+    const [liveParkNonce, setLiveParkNonce] = useState(0);
+
+    // ── PHONE MEMORY: no live skeleton engines while Motion Layer is open ──────
+    // Motion Layer's own pose work is the exact-pose path (the live loop is already suppressed under its lock), yet the live engines stayed
+    // resident: measured on desktop 1320 MB with them vs ~840 MB without (MoveNet worker ~350 MB, RTMPose's ORT worker ~130 MB). On a real
+    // iPhone the Object tool's SAM-2 then failed to load with "[wasm] RangeError: Out of memory". Freed memory only comes back by terminating
+    // the workers, so: dispose the MoveNet bridge + shared worker, terminate RTMPose's worker. When Motion Layer closes the bridge effect rebuilds
+    // MoveNet (RTMPose cannot be re-initialised in the same page: `failed` keeps it off until the next load).
+    useEffect(() => {
+      if (!parkLiveEngines) return;
+      poseLoopActiveRef.current = false;
+      latestKeypointsRef.current = null;
+      renderDirtyRef.current = true;
+      let freed = '';
+      if (poseBridgeRef.current) { poseBridgeRef.current.dispose(); poseBridgeRef.current = null; freed += 'MoveNet bridge '; }
+      terminateGlobalPoseWorker();
+      const R = rtmLiveRef.current;
+      const stopRtm = (eng: import('@/lib/rtmpose/engine').RtmposeEngine | null) => {
+        if (eng && !eng.terminated) { const n = eng.terminateRuntime(); poseDbg.event(`park: RTMPose runtime stopped (${n} worker${n === 1 ? '' : 's'})`); } // TEMP-DEBUG-POSE
+      };
+      if (R.eng) { stopRtm(R.eng); R.eng = null; freed += 'RTMPose '; }
+      else if (R.initP) void R.initP.then(() => { stopRtm(R.eng); R.eng = null; }); // still loading: stop it the moment it is up
+      R.failed = true; // MoveNet owns the skeleton from here on in this page
+      poseDbg.event(`park: live engines released for Motion Layer (${freed.trim() || 'none were running'})`); // TEMP-DEBUG-POSE
+      return () => { setLiveParkNonce((n) => n + 1); }; // Motion Layer closed: rebuild the skeleton engine
+    }, [parkLiveEngines]);
+
     useEffect(() => {
       if (!skeletonEnabled) {
         poseLoopActiveRef.current = false;
@@ -4450,6 +4835,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         renderDirtyRef.current = true;
         return;
       }
+      if (parkLiveEnginesRef.current) { poseLoopActiveRef.current = false; return; } // engines are parked until Motion Layer closes
       skeletonSuppressedRef.current = false;
       renderDirtyRef.current = true;
       if (typeof window === 'undefined') return;
@@ -4466,9 +4852,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      poseDbg.probeModelFiles(); // TEMP-DEBUG-POSE: debug panel only, no behaviour change
       const bridge = new PoseWorkerBridge({
         frameSkip: poseFrameSkipRef.current,
         onStatus: (msg: string) => {
+          poseDbg.event(`engine: ${msg}`); // TEMP-DEBUG-POSE: timestamped init trail
           onProcessingStatus?.(msg);
           // lib/poseWorkerBridge.ts's own failure message; a waiting tour step shows it.
           if (msg.startsWith('Skeleton load failed')) reportTourState('skeleton', 'failed');
@@ -4478,6 +4866,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       poseLoopActiveRef.current = true;
 
       bridge.onResult((keypoints, meta?: PoseResultMeta) => {
+        skeletonPrepSinceRef.current = 0; // a result arrived ⇒ the skeleton is no longer 'preparing'
         // A result for a frame the coach has scrubbed away from is never drawn
         // nor cached: it was requested before the latest seek, or (paused) it
         // belongs to another video time. It used to land on whatever frame was
@@ -4491,6 +4880,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           (resV.paused && Math.abs(meta.videoTime - resV.currentTime) > 0.05)
         )) {
           poseDbg.event(`seek: dropped result for t=${meta.videoTime.toFixed(2)} (video t=${resV.currentTime.toFixed(2)})`); // TEMP-DEBUG-POSE
+          return;
+        }
+        // LOOK-AHEAD result: while the main video plays and the hidden video is up, every live
+        // result belongs to the TIME-INDEXED buffer (it describes a frame the playhead has not
+        // reached yet, or just reached). It never goes through the live display / pose cache below.
+        if (keypoints && meta && resV && !resV.paused && !bakingRef.current && aheadVideoRef.current && aheadVideoRef.current.ready && !aheadDecodeOnlyRef.current) {
+          aheadBufRef.current.push(meta.videoTime, keypoints as AheadKp[]);
+          aheadStatsRef.current.dets++;
+          aheadRttRef.current = aheadRttRef.current * 0.8 + 0.2 * Math.max(20, performance.now() - meta.requestedAt);
+          renderDirtyRef.current = true;
           return;
         }
         // Precision AI Track capture (MoveNet-fallback path only) — record every
@@ -4532,7 +4931,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             poseLatestSampleRef.current = { kps: keypoints, ts: performance.now() };
             latestKeypointsRef.current = keypoints;
             noteLivePoseForLock(keypoints);
-            livePoseStampRef.current = { kps: keypoints, t: meta?.videoTime ?? (v?.currentTime ?? 0) };
+            livePoseStampRef.current = { kps: keypoints, t: meta?.videoTime ?? (v?.currentTime ?? 0), reqAt: meta?.requestedAt };
             renderDirtyRef.current = true;
             const sr = seekRequestRef.current;
             if (sr && meta && Math.abs(meta.videoTime - sr.t) < 0.05) {
@@ -4609,7 +5008,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       return () => {
         poseLoopActiveRef.current = false;
       };
-    }, [skeletonEnabled, onProcessingStatus, videoRef]);
+    }, [skeletonEnabled, onProcessingStatus, videoRef, liveParkNonce]);
 
     useEffect(() => {
       return () => {
@@ -4798,6 +5197,90 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       };
 
+      /** RTMPose-t is the DEFAULT live engine (?live=off → MoveNet, ?live=rtmpose-s → larger model): it owns the live pose. Never while foot lines are on (they need MediaPipe's feet), during a bake, or once tracks exist. */
+      const useRtmposeLive = () =>
+        !!liveEngineSwitch()
+        && !rtmLiveRef.current.failed
+        && !skeletonShowFootLineRef.current
+        && !bakingRef.current
+        && bakedTracksRef.current.length === 0;
+
+      /** One RTMPose detection, published exactly where the worker's / MediaPipe's results go (same refs, same smoothing as the MoveNet path). */
+      const runRtmposeLive = async (v: HTMLVideoElement) => {
+        const R = rtmLiveRef.current;
+        if (R.busy) return;
+        R.busy = true;
+        try {
+          if (!R.eng) {
+            if (!R.initP) {
+              const which = liveEngineSwitch()!;
+              R.initP = (async () => {
+                try {
+                  onProcessingStatus?.('Loading RTMPose…');
+                  const { RtmposeEngine } = await import('@/lib/rtmpose/engine');
+                  const eng = new RtmposeEngine(which, { proxy: true });
+                  const info = await eng.init();
+                  R.eng = eng;
+                  poseDbg.set('mode', `RTMPose ${which.slice(-1)} · ${info.threads} thread${info.threads > 1 ? 's' : ''} · worker`); // TEMP-DEBUG-POSE
+                  poseDbg.event(`rtmpose ready in ${Math.round(info.loadMs)} ms`); // TEMP-DEBUG-POSE
+                  onProcessingStatus?.('Skeleton ready');
+                  return true;
+                } catch (e) {
+                  R.failed = true;
+                  poseDbg.event(`rtmpose failed: ${(e as Error)?.message} → MoveNet`); // TEMP-DEBUG-POSE
+                  onProcessingStatus?.('RTMPose failed — using the normal skeleton');
+                  return false;
+                }
+              })();
+            }
+            await R.initP;
+            if (!R.eng) return;
+          }
+          if (v.readyState < 2 || v.videoWidth < 16) return;
+          const capAt = performance.now(), capT = v.currentTime;
+          if (Math.abs(capT - R.lastT) > 0.5) { R.eng.reset(); R.smoother?.reset(); } // a seek / a jump: forget the old box and smoothing
+          R.lastT = capT;
+          const raw = await R.eng.detect(v);
+          R.errs = 0;
+          const ms = performance.now() - capAt;
+          if (!R.smoother) { const { OneEuroKeypointSmoother } = await import('@/lib/keypointSmooth'); R.smoother = new OneEuroKeypointSmoother(); }
+          // sampling stats for the debug panel: detections/s and per-detection ms, every ~2 s
+          R.ms.push(ms); R.n++;
+          if (!R.since) R.since = capAt;
+          if (capAt - R.since > 2000) {
+            const s2 = [...R.ms].sort((a, b) => a - b);
+            poseDbg.event(`rtmpose: ${(R.n / ((capAt - R.since) / 1000)).toFixed(1)} det/s · ${Math.round(s2[s2.length >> 1])} ms p50 · ${Math.round(s2[Math.floor(s2.length * 0.95)] ?? 0)} ms p95`); // TEMP-DEBUG-POSE
+            R.ms = []; R.n = 0; R.since = capAt;
+          }
+          if (!raw || exactPoseLockRef.current) return;
+          if (skeletonSuppressedRef.current || !skeletonDrawEnabledRef.current) {
+            if (liveSkeletonActive()) latestKeypointsRef.current = null;
+            return;
+          }
+          const kps = R.smoother.apply(raw, performance.now()) as PoseKeypoint[];
+          const lastFrame = skeletonFramesRef.current.at(-1);
+          if (!lastFrame || Math.abs(capT - lastFrame.timeSeconds) > 1 / 60) {
+            skeletonFramesRef.current.push({ timeSeconds: capT, keypoints: kps });
+            if (skeletonFramesRef.current.length > MAX_SKELETON_FRAMES) {
+              skeletonFramesRef.current = skeletonFramesRef.current.slice(-MAX_SKELETON_FRAMES);
+            }
+          }
+          if (liveSkeletonActive()) {
+            posePrevSampleRef.current = poseLatestSampleRef.current;
+            poseLatestSampleRef.current = { kps, ts: performance.now() };
+            latestKeypointsRef.current = kps;
+            noteLivePoseForLock(kps);
+            livePoseStampRef.current = { kps, t: capT, reqAt: capAt };
+            renderDirtyRef.current = true;
+          }
+        } catch (e) {
+          console.warn('[Canvas] RTMPose live frame failed:', e);
+          if (++R.errs >= 5) { R.failed = true; poseDbg.event(`rtmpose: 5 failures in a row → MoveNet`); } // TEMP-DEBUG-POSE
+        } finally {
+          R.busy = false;
+        }
+      };
+
       // While PLAYING: drive detection from presented frames (rVFC) / rAF.
       // While PAUSED: do NOT poll. requestVideoFrameCallback never fires while
       // paused (which stalled updates after pause), and re-inferring a static
@@ -4820,6 +5303,83 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         poseScheduleRef.current = { kind: 'rvfc', id };
       };
 
+      // ── Look-ahead video lifecycle ─────────────────────────────────────────────
+      const stopAhead = () => {
+        if (aheadWatchdogRef.current !== null) { clearInterval(aheadWatchdogRef.current); aheadWatchdogRef.current = null; }
+        if (aheadVideoRef.current) poseDbg.event('look-ahead video released'); // TEMP-DEBUG-POSE
+        aheadVideoRef.current?.destroy();
+        aheadVideoRef.current = null;
+        aheadBufRef.current.clear();
+        aheadGapUntilRef.current = 0;
+      };
+      /** The hidden video to read frames from, or null ⇒ use the main video exactly as before. */
+      const ensureAhead = (v: HTMLVideoElement): HTMLVideoElement | null => {
+        if (!aheadEnabledRef.current || aheadBlockedRef.current || v.paused) return null;
+        let a = aheadVideoRef.current;
+        if (!a) {
+          a = new LookAheadVideo();
+          aheadVideoRef.current = a;
+          a.start(v);
+          poseDbg.event('look-ahead video started'); // TEMP-DEBUG-POSE
+          // SAFETY: if the MAIN video stops advancing while it should play (a second decoder starving it, as seen on an
+          // iPhone), release the hidden video at once and never create it again this session.
+          const watch = { t: v.currentTime, at: performance.now() };
+          aheadWatchdogRef.current = window.setInterval(() => {
+            const m = videoRef.current;
+            if (!m || m.paused) { watch.at = performance.now(); return; }
+            if (m.currentTime !== watch.t) { watch.t = m.currentTime; watch.at = performance.now(); }
+            else if (performance.now() - watch.at > 700) {
+              poseDbg.event('look-ahead released: main video stalled'); // TEMP-DEBUG-POSE
+              aheadBlockedRef.current = true;
+              stopAhead();
+            }
+          }, 250);
+        }
+        if (a.failed) {
+          poseDbg.event(`look-ahead failed (${a.failReason}) → previous live path`); // TEMP-DEBUG-POSE
+          return null;
+        }
+        const leadOv = aheadLeadOverrideRef.current;
+        const lead = leadOv ?? leadSeconds(aheadRttRef.current, v.playbackRate || 1);
+        if (!aheadGapUntilRef.current) { aheadGapUntilRef.current = v.currentTime + lead; const q0 = v.getVideoPlaybackQuality?.(); aheadStatsRef.current = { at: performance.now(), dets: 0, draws: 0, hits: 0, dropped: q0?.droppedVideoFrames ?? 0, total: q0?.totalVideoFrames ?? 0, startedAt: performance.now(), totDraws: 0, totHits: 0 }; }
+        a.sync(v, lead);
+        // TEMP-DEBUG-POSE: one state line every ~2 s so a phone screenshot shows what the hidden video is really doing
+        const nowMs = performance.now();
+        if (a.video && nowMs - aheadLogAtRef.current > 2000) {
+          aheadLogAtRef.current = nowMs;
+          // PROBE metrics for the last window: detections/s, buffer depth ahead of the playhead, how many draws found a result
+          // (coverage), the MAIN video's dropped frames, so a phone screenshot answers "can it keep up, does it hurt the main video".
+          const st = aheadStatsRef.current;
+          const secs = Math.max(0.5, (nowMs - st.at) / 1000);
+          const q = v.getVideoPlaybackQuality?.();
+          const dDrop = q ? q.droppedVideoFrames - st.dropped : 0;
+          const dTot = q ? q.totalVideoFrames - st.total : 0;
+          const lastT = aheadBufRef.current.lastTime;
+          const depthMs = lastT === null ? 0 : Math.round((lastT - v.currentTime) * 1000);
+          const cov = st.draws ? Math.round((100 * st.hits) / st.draws) : null;
+          poseDbg.event(`look-ahead: Δ${Math.round((a.video.currentTime - v.currentTime) * 1000)}ms (want ${Math.round(lead * 1000)}) · ready ${a.ready ? 'y' : 'n'} · paused ${a.video.paused ? 'y' : 'n'} · rate ${a.video.playbackRate.toFixed(2)} · rs ${a.video.readyState} ns ${a.video.networkState}${a.video.error ? ` err ${a.video.error.code}` : ''} · ${a.video.videoWidth}x${a.video.videoHeight} vs ${v.videoWidth}x${v.videoHeight} · buf ${aheadBufRef.current.size} · rtt ${Math.round(aheadRttRef.current)}ms`);
+          poseDbg.event(`la-stats: ${(st.dets / secs).toFixed(1)} det/s · depth ${depthMs >= 0 ? '+' : ''}${depthMs}ms · covered ${cov === null ? '–' : cov + '%'} · main dropped ${dDrop}/${dTot}${aheadDecodeOnlyRef.current ? ' · DECODE-ONLY' : ''}`);
+          // Graceful degradation: past the warm-up gap, if the buffer does not cover the playhead most of the time, release the
+          // hidden video and use the live path (never freeze, never show an increasingly outdated pose).
+          st.totDraws += st.draws; st.totHits += st.hits;
+          const tailFrom = Number.isFinite(v.duration) ? v.duration - lead - 0.05 : Infinity;
+          if (!aheadDecodeOnlyRef.current && v.currentTime > aheadGapUntilRef.current + 1 && v.currentTime < tailFrom && coverageDegraded(st.hits, st.draws, 30)) {
+            poseDbg.event(`look-ahead released: not keeping up (covered ${cov}%) → live path until the next play`); // TEMP-DEBUG-POSE
+            aheadBlockedRef.current = true;
+            aheadSoftBlockRef.current = true;
+            stopAhead();
+            return null;
+          }
+          aheadStatsRef.current = { ...st, at: nowMs, dets: 0, draws: 0, hits: 0, dropped: q?.droppedVideoFrames ?? 0, total: q?.totalVideoFrames ?? 0 };
+        }
+        if (!a.ready) return null;
+        if (aheadDecodeOnlyRef.current) return null; // decode-only probe: hidden video plays, detection stays on the main video
+        aheadBufRef.current.prune(v.currentTime);
+        // Warm-up gap (deep lead): until the playhead reaches the first hidden frame, alternate main / hidden detections.
+        if (!sampleHiddenNow(aheadTickRef.current++, v.currentTime, aheadGapUntilRef.current, Number.isFinite(v.duration) ? v.duration - lead - 0.05 : Infinity)) return null;
+        return a.video;
+      };
+
       const sendFrame = () => {
         if (!poseLoopActiveRef.current) return;
         // ── NO LIVE INFERENCE UNDER THE EXACT-POSE LOCK ────────────────────
@@ -4839,6 +5399,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (exactPoseLockRef.current) { scheduleNext(); return; }
         const bridge = poseBridgeRef.current;
         const v = videoRef.current;
+        // EXPERIMENT: RTMPose owns the live pose (only with ?live=rtmpose-t|s).
+        if (v && useRtmposeLive()) {
+          void runRtmposeLive(v);
+          scheduleNext();
+          return;
+        }
         // FOOT LINES ON ⇒ MediaPipe owns the live pose; MoveNet does not run.
         if (v && useMediaPipeLive()) {
           void runMediaPipeLive(v);
@@ -4851,7 +5417,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // pointless then. The bake pass itself (bakingRef) always sends.
           if (bakingRef.current || bakedTracksRef.current.length === 0) {
             bridge.frameSkip = poseFrameSkipRef.current;
-            bridge.sendFrame(v);
+            // Playing: detect on the look-ahead video (a frame one round trip in the future) when it is up.
+            bridge.sendFrame((!bakingRef.current ? ensureAhead(v) : null) ?? v);
           }
         }
         scheduleNext();
@@ -4869,6 +5436,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         if (!v || !v.paused) return;
         // Same source rule as sendFrame: whichever model owns the live pose
         // must also own the paused frame, or pausing would swap the skeleton.
+        if (useRtmposeLive()) {
+          rtmLiveRef.current.smoother?.reset(); // snap to this frame instead of easing from the last one
+          void runRtmposeLive(v);
+          return;
+        }
         if (useMediaPipeLive()) {
           mpLiveNextAtRef.current = 0; // a static frame is worth detecting now
           void runMediaPipeLive(v);
@@ -4881,7 +5453,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         bridge.sendFrame(v);
       };
 
-      const onPause = () => detectStaticFrame();
+      const onPause = () => { stopAhead(); detectStaticFrame(); };
 
       // ONE pose for the frame the coach stopped on. A touch drag on the timeline
       // seeks on every move; detecting on each `seeked` spent the single
@@ -4938,7 +5510,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       };
       // Resume-from-pause: snap the filter to the live frame instead of letting
       // a stale velocity estimate produce a jitter/lag burst on the first frames.
-      const onPlay = () => { livePoseClockRef.current = performance.now(); poseBridgeRef.current?.resetSmoothing(); cancelScheduled(); scheduleNext(); };
+      const onPlay = () => { if (aheadSoftBlockRef.current) { aheadSoftBlockRef.current = false; aheadBlockedRef.current = false; } livePoseClockRef.current = performance.now(); poseBridgeRef.current?.resetSmoothing(); stopAhead(); cancelScheduled(); scheduleNext(); };
       // Returning from another app/tab: rVFC/rAF were throttled or dropped
       // while hidden — restart the loop (playing) or re-snap the static frame
       // (paused) so the skeleton never "disappears" after switching apps.
@@ -4962,6 +5534,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
       return () => {
         poseLoopActiveRef.current = false;
+        stopAhead();
         cancelScheduled();
         if (seekSettleTimer) clearTimeout(seekSettleTimer);
         video.removeEventListener('pause', onPause);
@@ -5843,6 +6416,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               videoOrder: stroMotionVideoOrderRef.current,
               endPlate: stroMotionEndPlateRef.current,
               overlayMode: stroMotionOverlayModeRef.current,
+              behindMask: stroMotionBehindMaskRef.current,
               ...(stroMotionGhostOpacityRef.current !== undefined
                 ? { fadeMode: 'uniform' as const, opacity: stroMotionGhostOpacityRef.current }
                 : {}),
@@ -5988,6 +6562,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             videoOrder: stroMotionVideoOrderRef.current,
             endPlate: stroMotionEndPlateRef.current,
             overlayMode: stroMotionOverlayModeRef.current,
+            behindMask: stroMotionBehindMaskRef.current,
             ...(stroMotionGhostOpacityRef.current !== undefined
               ? { fadeMode: 'uniform' as const, opacity: stroMotionGhostOpacityRef.current }
               : {}),
@@ -6165,7 +6740,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const bakedPose =
           skeletonAuthorised && skeletonDimsOk &&
           !exactPoseLockRef.current && poseModeRef.current === 'live' && video && !bakingRef.current
-            ? lookupBakedPose(video.currentTime)
+            ? (lookupBakedPose(video.currentTime)
+              // look-ahead: a pose detected for THIS video time, one round trip before the playhead got here
+              ?? (!video.paused && aheadVideoRef.current?.ready && !aheadDecodeOnlyRef.current ? (() => {
+                const hit = aheadBufRef.current.lookup(video.currentTime);
+                aheadStatsRef.current.draws++; if (hit) aheadStatsRef.current.hits++;
+                return hit;
+              })() : null))
             : null;
 
         // A BAKED POSE OUTRANKS SUPPRESSION.
@@ -6248,7 +6829,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               ? `stale pose hidden (${hiddenAsStalePaused ? `pose t=${stamp!.t.toFixed(2)}, video t=${video!.currentTime.toFixed(2)}` : 'no fresh result'})`
               : 'stale pose shown again');
           }
-          if (!hiddenByTrackScope && !hiddenAsStale && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
+          // Look-ahead healthy and playing: the live pose is no longer updated, so with no look-ahead result near the
+          // playhead the right thing is to draw NOTHING, never the stale live pose (it would sit off the player).
+          const aheadOwnsDisplay = !bakedPose && !!video && !video.paused && !!aheadVideoRef.current?.ready && !aheadDecodeOnlyRef.current;
+          if (!hiddenByTrackScope && !hiddenAsStale && !aheadOwnsDisplay && (bakedPose || (latestKeypointsRef.current && latestKeypointsRef.current.length > 0)) && vW > 0 && vH > 0) {
             // Motion smoothing (live path): while PLAYING, INTERPOLATE the
             // displayed pose between the last two detections (prev → latest,
             // blended by sample age). Bounded — no overshoot, no stale-freeze
@@ -6268,12 +6852,30 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const age = performance.now() - latestS.ts;
               // a: 0 → show prev pose, 1 → show latest pose. Clamped, no overshoot.
               const a = Math.min(1, Math.max(0, age / interval));
-              if (a < 0.98) {
+              if (!legacyLiveDisplayRef.current) {
+                // Continue the motion from the NEWEST detection instead of replaying the
+                // previous one (lib/liveDisplay.ts: ≈ one detection interval less lag,
+                // measured in lib/skeletonBench/liveSim.ts). Legacy switch keeps the blend below.
+                displayKps = continuePose(latestS, prevS, performance.now()) as typeof displayKps;
+              } else if (a < 0.98) {
                 displayKps = latestS.kps.map((k, i) => {
                   const p = prevS.kps[i];
                   if (!p || k.score < 0.2 || p.score < 0.2) return k;
                   return { ...k, x: p.x + (k.x - p.x) * a, y: p.y + (k.y - p.y) * a };
                 });
+              }
+            }
+            // TEMP-DEBUG-POSE: how stale is what the viewer is looking at? (video time now − video time of the frame the
+            // newest live pose was detected on), plus where the delay goes (round trip, wait for the next draw, interval).
+            if (!bakedPose && video && !video.paused) {
+              const ls = poseLatestSampleRef.current, st = livePoseStampRef.current;
+              if (ls && st && st.kps === ls.kps) {
+                poseDbg.drawn({
+                  videoNow: video.currentTime, rate: video.playbackRate || 1, videoCapture: st.t, arrivalPerf: ls.ts,
+                  reqAt: st.reqAt, prevArrival: posePrevSampleRef.current?.ts, newSample: traceLastKpsRef.current !== ls.kps,
+                  legacy: legacyLiveDisplayRef.current,
+                });
+                traceLastKpsRef.current = ls.kps;
               }
             }
             ctx.save();
@@ -6286,7 +6888,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
                 showAngles: false,
                 showHeadLine: skeletonShowHeadLineRef.current,
                 showHeadDirection: skeletonShowHeadDirectionRef.current,
-                showFootLine: skeletonShowFootLineRef.current,
+                showFootLine: footLinesDrawOn(),
                 classicColors: skeletonClassicColorsRef.current,
                 parts: skeletonPartsRef.current,
               });
@@ -6298,26 +6900,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             const emitBaked = !!bakedPose && animTickRef.current % 6 === 0;
             if (onSkeletonAnglesUpdateRef.current && (emitBaked || (!bakedPose && latestKeypointsRef.current !== lastEmittedKpsRef.current))) {
               lastEmittedKpsRef.current = latestKeypointsRef.current;
-              const kps = displayKps;
-              const scoreMin = 0.2;
-              const angleDefs = [
-                { indices: [7, 5, 9], label: 'L Elbow' },
-                { indices: [8, 6, 10], label: 'R Elbow' },
-                { indices: [13, 11, 15], label: 'L Knee' },
-                { indices: [14, 12, 16], label: 'R Knee' },
-              ];
-              const angles: Array<{ label: string; deg: number }> = [];
-              for (const { indices: [vi, ai, bi], label } of angleDefs) {
-                const v = kps[vi], a = kps[ai], b = kps[bi];
-                if (!v || !a || !b || v.score < scoreMin || a.score < scoreMin || b.score < scoreMin) continue;
-                const v1x = a.x - v.x, v1y = a.y - v.y;
-                const v2x = b.x - v.x, v2y = b.y - v.y;
-                const mag = Math.sqrt(v1x * v1x + v1y * v1y) * Math.sqrt(v2x * v2x + v2y * v2y);
-                if (mag < 1) continue;
-                const deg = Math.round(Math.acos(Math.min(1, Math.max(-1, (v1x * v2x + v1y * v2y) / mag))) * 180 / Math.PI);
-                angles.push({ label, deg });
-              }
-              onSkeletonAnglesUpdateRef.current(angles);
+              onSkeletonAnglesUpdateRef.current(computeSkeletonAngles(displayKps));
             }
             ctx.restore();
           } else if (
@@ -6330,6 +6913,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             // who presses play early would otherwise just see no skeleton.
             drawCanvasHint(ctx, dx, dy, dw, 'Preparing the skeleton…');
             reportTourState('skeleton', 'loading'); // a waiting tour step shows it too
+            // Elapsed time (and why it can be long on a first visit) as a SECOND line, so the wait is understood, not mistaken for a hang.
+            if (skeletonPrepSinceRef.current === 0) skeletonPrepSinceRef.current = performance.now();
+            const prepS = Math.round((performance.now() - skeletonPrepSinceRef.current) / 1000);
+            if (prepS >= 4) drawCanvasHint(ctx, dx, dy + 30, dw, `${prepS} s${prepS >= 8 ? ' · first visit downloads the AI model' : ''}`);
           } else if (hiddenAsStale && vW > 0 && vH > 0) {
             drawCanvasHint(ctx, dx, dy, dw, 'Skeleton catching up…');
           } else if (hiddenByTrackScope && vW > 0 && vH > 0) {
@@ -6445,7 +7032,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           // Foot direction arrows — REAL toe keypoints only (appended at index
           // 17+ by AI Track / AI Detect). No estimate arrows: absent data means
           // absent arrow. Drawn only when the Foot line skeleton toggle is ON.
-          if (skeletonShowFootLineRef.current) {
+          if (footLinesDrawOn()) {
             const namedToe = (nm: string) => {
               for (let fi = 17; fi < kps.length; fi++) {
                 const c = kps[fi];
@@ -6561,6 +7148,12 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const camW = pip.w;
           const camH = pip.h;
           ctx.save();
+          // SCREEN SPACE. The PiP rect, its hit test and its drag all live in canvas CSS px
+          // (see the priority router in onPointerDown). Without this reset the PiP was drawn
+          // inside the zoom/pan transform set up above, so after a zoom it was scaled and
+          // moved with the video while its handles stayed where they were: unreachable.
+          // At zoom 1, no pan, this is the identical transform, so nothing changes there.
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           ctx.globalAlpha = webcamOpacityRef.current;
 
           const maskCanvas = webcamMaskRef.current;
@@ -6646,27 +7239,31 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           ctx.restore();
         }
 
-        // Completed strokes
+        // Completed strokes + marks in progress: constant size on screen at every zoom (lib/markScale.ts).
+        const markK = counterZoomScale(zoomRef.current);
+        const mctx = constantSizeContext(ctx, markK);
+        setMarkScale(markK);
         const jointBallR = jointNodeRadius(videoBoundsRef.current.dw, videoBoundsRef.current.dh);
+        try {
         // The swing path's time range follows the video's clock (undefined without one: drawn as before).
         const drawingsTime = drawingVideoTime();
-        for (const s of strokesRef.current) drawStroke(ctx, s, animTickRef.current, jointBallR, drawingsTime);
+        for (const s of strokesRef.current) drawStroke(mctx, s, animTickRef.current, jointBallR, drawingsTime);
 
         // Active (in-progress) stroke
-        if (activeStrokeRef.current) drawStroke(ctx, activeStrokeRef.current, animTickRef.current, jointBallR);
+        if (activeStrokeRef.current) drawStroke(mctx, activeStrokeRef.current, animTickRef.current, jointBallR);
 
         // Swing path being drawn
         if (swingDrawingRef.current && swingPtsRef.current.length > 0) {
           const pts = swingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
+          drawSmoothPath(mctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
         // Manual swing path being drawn
         if (manualSwingActiveRef.current && manualSwingPtsRef.current.length > 0) {
           const pts = manualSwingPtsRef.current;
           const opts = drawingOptsRef.current;
-          drawSmoothPath(ctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
+          drawSmoothPath(mctx, pts, opts.color, opts.lineWidth, 0.8, opts.dashed ?? false, opts.arrowAtEnd === true, circleSpinningRef.current);
         }
 
         // Joint chain in progress
@@ -6676,7 +7273,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           const opts = drawingOptsRef.current;
           const previewNodes = cursor ? [...pts, cursor] : pts;
           drawJointChainStroke(
-            ctx,
+            mctx,
             {
               tool: 'jointChain',
               nodes: previewNodes,
@@ -6690,6 +7287,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             jointBallR,
           );
         }
+        } finally { setMarkScale(1); }
 
         // Locked angle measurements
         for (const m of angleMeasRef.current) drawAngleMeas(ctx, m);
@@ -6949,10 +7547,15 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           }
 
           const drawPt = disp ?? tgt;
+          // Counter the zoom about the crosshair's own centre: constant size on screen.
+          const curInv = counterZoomScale(zoomRef.current);
           if (drawPt && cursorAlpha > 0.04) {
             const px = drawPt.x;
             const py = drawPt.y;
             ctx.save();
+            ctx.translate(px, py);
+            ctx.scale(curInv, curInv);
+            ctx.translate(-px, -py);
             ctx.globalAlpha = cursorAlpha;
             ctx.strokeStyle = 'rgba(0,0,0,0.55)';
             ctx.lineWidth = 2.5;
@@ -6987,6 +7590,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
               const r = 12 + t * 36;
               const a = (1 - t) * 0.55 * cursorAlpha;
               ctx.save();
+              ctx.translate(rip.x, rip.y);
+              ctx.scale(curInv, curInv);
+              ctx.translate(-rip.x, -rip.y);
               ctx.globalAlpha = a;
               ctx.strokeStyle = 'rgba(255,255,255,0.9)';
               ctx.lineWidth = 2;
@@ -7102,75 +7708,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const mcItems = measurementColumnRef.current;
         if (mcItems !== null) {
           const s = mcScaleRef.current;
-          const mcW = Math.round(MC_BASE_W * s);
-          const mcLineH = Math.round(22 * s);
-          const pad = Math.round(8 * s);
-          const hasItems = mcItems.length > 0;
-          const mcH = hasItems ? mcItems.length * mcLineH + Math.round(28 * s) : Math.round(48 * s);
+          const { w: mcW, h: mcH } = dataColumnSize(mcItems.length, s);
           const mcX = Math.round(Math.min(mcPosRef.current.x * W, W - mcW - 4));
           const mcY = Math.round(Math.min(mcPosRef.current.y * H, H - mcH - 4));
-          const f = (px: number) => `${Math.round(px * s)}px`;
-
-          ctx.save();
-          ctx.fillStyle = 'rgba(0,0,0,0.75)';
-          ctx.beginPath();
-          if (ctx.roundRect) ctx.roundRect(mcX, mcY, mcW, mcH, 10);
-          else ctx.rect(mcX, mcY, mcW, mcH);
-          ctx.fill();
-
-          // Header — reflects the locked owner (phase / frame / live).
-          ctx.font = `bold ${f(10)} -apple-system, sans-serif`;
-          ctx.fillStyle = 'rgba(255,255,255,0.4)';
-          const mcTitle = (mcTitleRef.current || 'DATA COLUMN').toUpperCase();
-          ctx.fillText(mcTitle.length > 22 ? mcTitle.slice(0, 21) + '…' : mcTitle, mcX + pad, mcY + Math.round(14 * s));
-
-          // Drag handle dots
-          ctx.fillStyle = 'rgba(255,255,255,0.25)';
-          for (let d = 0; d < 3; d++) ctx.fillRect(mcX + mcW - Math.round(18 * s) + d * Math.round(5 * s), mcY + Math.round(10 * s), 2, 2);
-
-          if (hasItems) {
-            for (let i = 0; i < mcItems.length; i++) {
-              const item = mcItems[i];
-              const y = mcY + Math.round(28 * s) + i * mcLineH;
-              if (item.value === 0 && !item.unit) {
-                ctx.fillStyle = 'rgba(255,255,255,0.8)';
-                ctx.font = `italic ${f(11)} -apple-system, sans-serif`;
-                ctx.fillText(item.label, mcX + pad, y);
-              } else if (item.unit === '' && item.value !== 0) {
-                ctx.fillStyle = 'rgba(255,255,255,0.6)';
-                ctx.font = `${f(11)} -apple-system, sans-serif`;
-                ctx.fillText(item.label, mcX + pad, y);
-                ctx.fillStyle = '#93C5FD';
-                ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
-                ctx.fillText(`${item.value}`, mcX + mcW - pad - ctx.measureText(`${item.value}`).width, y);
-              } else {
-                ctx.fillStyle = 'rgba(255,255,255,0.6)';
-                ctx.font = `${f(11)} -apple-system, sans-serif`;
-                ctx.fillText(item.label, mcX + pad, y);
-                ctx.fillStyle = '#93C5FD';
-                ctx.font = `bold ${f(12)} -apple-system, sans-serif`;
-                const valText = `${item.value}${item.unit}`;
-                ctx.fillText(valText, mcX + mcW - pad - ctx.measureText(valText).width, y);
-              }
-            }
-          } else {
-            ctx.font = `${f(11)} -apple-system, sans-serif`;
-            ctx.fillStyle = 'rgba(255,255,255,0.3)';
-            ctx.fillText('Draw to add measurements', mcX + pad, mcY + Math.round(34 * s));
-          }
-
-          // Resize handle — bottom-right corner (diagonal grip lines).
-          ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-          ctx.lineWidth = 1.5;
-          for (let g = 0; g < 3; g++) {
-            const off = 4 + g * 4;
-            ctx.beginPath();
-            ctx.moveTo(mcX + mcW - off, mcY + mcH - 4);
-            ctx.lineTo(mcX + mcW - 4, mcY + mcH - off);
-            ctx.stroke();
-          }
-
-          ctx.restore();
+          // Shared with the generated video (drawExportOverlay `dataColumn`): same look.
+          drawDataColumnBox(ctx, mcItems, mcTitleRef.current || 'DATA COLUMN', mcX, mcY, s, mcSelectedRef.current);
 
           // Report the column's live CSS-pixel rect so the HTML +/- buttons
           // anchor to it exactly (tracks drag + resize in real time). Convert
@@ -7209,10 +7751,13 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         // the picture, and underneath the playback dock that covers that strip.
         // `maxBottomY` then nudges it clear of the controls; on a surface with no
         // dock the clamp never binds.
-        drawVideoWatermark(ctx, W, H, {
-          x: dx, y: dy, w: dw, h: dh,
-          maxBottomY: dockTopRef.current,
-        });
+        if (watermarkModeRef.current !== 'off') {
+          drawVideoWatermark(ctx, W, H, {
+            x: dx, y: dy, w: dw, h: dh,
+            maxBottomY: dockTopRef.current,
+            scale: watermarkModeRef.current === 'small' ? 0.55 : 1,
+          });
+        }
 
         if (renderWaitersRef.current.length > 0) {
           const waiters = renderWaitersRef.current.splice(0);
@@ -7344,7 +7889,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       const opts = drawingOptsRef.current;
       if (target.kind === 'stroke') {
         const s = strokesRef.current[target.idx];
-        if (!s || s.tool === 'text' || s.tool === 'swingPath' || s.tool === 'manualSwing') {
+        if (!s || s.tool === 'text') {
           return DEFAULT_CONTEXTUAL_SNAPSHOT;
         }
         const styled = s as StrokeLine;
@@ -7443,7 +7988,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (target.kind === 'stroke') {
         const strokes = [...strokesRef.current];
         const raw = strokes[target.idx];
-        if (!raw || raw.tool === 'text' || raw.tool === 'swingPath' || raw.tool === 'manualSwing') return;
+        if (!raw || raw.tool === 'text') return;
         const s = { ...raw } as StrokeLine;
         if (patch.color !== undefined) s.color = patch.color;
         if (patch.lineWidth !== undefined) s.lw = patch.lineWidth;
@@ -7502,6 +8047,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const precisionToolUsesToggleDownUp = (t: ToolType): boolean =>
       t === 'erase' ||
+      t === 'pen' ||
       t === 'line' ||
       t === 'arrow' ||
       t === 'arrowAngle' ||
@@ -8295,6 +8841,70 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     // ── Pointer down ───────────────────────────────────────────────────────
 
+    // The press on a row of the data column (highlight its line, delete it in delete mode, or edit its value).
+    // Run when a tap on the column ends without a move, so a drag from the same spot moves the column instead.
+    const columnRowPress = (pos: { x: number; y: number }): boolean => {
+      const mcItemsNow = measurementColumnRef.current;
+      const canvas = canvasRef.current;
+      if (mcItemsNow === null || !canvas) return false;
+      const cW = cssW(canvas), cH = cssH(canvas);
+      const s = mcScaleRef.current;
+      const mW = Math.round(MC_BASE_W * s);
+      const rowH = Math.round(22 * s);
+      const mH = mcItemsNow.length > 0 ? mcItemsNow.length * rowH + Math.round(28 * s) : Math.round(48 * s);
+      const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
+      const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
+      if (mcItemsNow.length > 0) {
+        // Rows render with the text BASELINE at mY + 28*s + i*rowH (fillText
+        // draws UPWARD from the baseline, render at 5088). The old floor-from-
+        // top band was off by one — a click on a row's text resolved to the
+        // row ABOVE it. Round to the nearest rendered baseline so a click
+        // anywhere on row i's text/value selects row i.
+        const rowIdx = Math.round((pos.y - (mY + Math.round(28 * s))) / rowH);
+        if (pos.x >= mX && pos.x <= mX + mW && rowIdx >= 0 && rowIdx < mcItemsNow.length) {
+          const item = mcItemsNow[rowIdx];
+          // Delete-mode: a row-click removes that measurement.
+          if (columnDeleteModeRef.current && onMeasurementItemDeleteRef.current) {
+            onMeasurementItemDeleteRef.current(item.id);
+            return true;
+          }
+          // Map the measurement to its overlay line by its STABLE id prefix
+          // (ai-sa/ha/hd/lf/rf/ra), NOT a label substring. Substring matching
+          // mis-routed 'Shoulder-Hip Diff' (contains "shoulder") and
+          // 'Foot Distance' (contains "foot") onto real lines, and rows with no
+          // overlay (elbow/knee interior angles, diff, ruler) matched loosely.
+          // The id prefix is unambiguous and collision-free.
+          const OVERLAY_BY_ID: Record<string, string> = {
+            sa: 'shoulder', ha: 'hip', hd: 'head', lf: 'lfoot', rf: 'rfoot', ra: 'racket',
+          };
+          const oid = item.id.startsWith('ai-')
+            ? (OVERLAY_BY_ID[item.id.split('-')[1]] ?? null)
+            : null;
+          if (oid && showMeasurementOverlaysRef.current) {
+            // Toggle: clicking the already-active line clears the selection.
+            activeOverlayIdRef.current = activeOverlayIdRef.current === oid ? null : oid;
+            renderDirtyRef.current = true;
+            return true;
+          }
+          // No matching line (e.g. a note or diff row): fall back to numeric edit.
+          if (onMeasurementItemEdit && (item.unit || item.value !== 0)) {
+            const newVal = prompt(`Edit ${item.label}:`, String(item.value));
+            if (newVal !== null && newVal.trim() !== '') {
+              const parsed = parseFloat(newVal);
+              if (!isNaN(parsed)) {
+                onMeasurementItemEdit(item.id, parsed);
+                return true;
+              }
+            }
+          }
+        }
+      }
+      return false;
+    };
+    const columnRowPressRef = useRef(columnRowPress);
+    columnRowPressRef.current = columnRowPress;
+
+
     const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvasEl = e.target as HTMLCanvasElement;
       const toolEarly = activeToolRef.current;
@@ -8319,6 +8929,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         e.preventDefault();
         const ch =
           precisionCrosshairDisplayRef.current ?? precisionCrosshairTargetRef.current;
+        precisionTapRef.current.cancel();
         if (ch) precisionCommitRef.current?.(ch);
         return;
       }
@@ -8397,15 +9008,65 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      // ── Data column header drag / corner resize ──────────────────────────
+      // Checked BEFORE the precision anchor (rule 3), which used to claim every
+      // single-finger touch: with precision on the column could not be moved.
+      // Touch gets 44 px targets (lib/drawingTools.ts dataColumnHit).
+      {
+        const mcItemsEarly = measurementColumnRef.current;
+        const canvasEarly = canvasRef.current;
+        if (mcItemsEarly !== null && canvasEarly && (e.pointerType !== 'mouse' || e.button === 0)) {
+          // The column is drawn in SCREEN space (it does not follow zoom or pan), so it is hit-tested, dragged
+          // and resized in screen space too. getPos() undoes the zoom/pan: the two only agree at 100% with no pan,
+          // which is why the column could not be grabbed or moved once the video was zoomed.
+          const posEarly = getPosFromPointerEvent(e);
+          const cW = cssW(canvasEarly), cH = cssH(canvasEarly);
+          const sc = mcScaleRef.current;
+          const mW = Math.round(MC_BASE_W * sc);
+          const rowH = Math.round(22 * sc);
+          const mH = mcItemsEarly.length > 0 ? mcItemsEarly.length * rowH + Math.round(28 * sc) : Math.round(48 * sc);
+          const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
+          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
+          const hit = dataColumnHit(posEarly, { x: mX, y: mY, w: mW, h: mH }, {
+            headerH: Math.round(26 * sc), touch: e.pointerType === 'touch', selected: mcSelectedRef.current, body: true,
+          });
+          mcTapRef.current = null;
+          if (hit) {
+            canvasEl.setPointerCapture(e.pointerId);
+            mcSelectedRef.current = true;
+            if (hit === 'resize') mcResizingRef.current = { startX: posEarly.x, startY: posEarly.y, origScale: sc };
+            else {
+              mcDraggingRef.current = { startX: posEarly.x, startY: posEarly.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
+              // Anywhere on the body: a tap that does not move still presses the row (see onPointerUp).
+              if (hit === 'body') mcTapRef.current = { x: posEarly.x, y: posEarly.y, moved: false };
+            }
+            isDraggingRef.current = true;
+            renderDirtyRef.current = true;
+            e.preventDefault();
+            return;
+          }
+        }
+        // A press anywhere else deselects the column (its handles hide).
+        if (mcSelectedRef.current) { mcSelectedRef.current = false; renderDirtyRef.current = true; }
+      }
+
       // ── Priority router (rule 3): precision anchor acquisition ────────────
+      // Not for the Select tool: it does not draw, and the anchor used to swallow
+      // its tap, so with precision on nothing could be selected or moved.
+      // A Motion Layer "Select Area" rubber-band is a modal gesture of its own: while it is armed the drag draws the
+      // box, so a latched precision-draw mode must not take the finger as an anchor (it ended the drag with "Selection
+      // cancelled" and no box; reproduced in the phone-emulated browser).
       const precisionTouchEligible =
         precisionTouchDrawRef.current &&
+        !isSelectingStroRegionRef.current &&
         e.pointerType === 'touch' &&
         toolEarly !== 'zoom' &&
-        toolEarly !== 'objectMultiplier';
+        toolEarly !== 'objectMultiplier' &&
+        toolEarly !== 'select';
 
       if (precisionTouchEligible && precisionAnchorPointerIdRef.current === null) {
         precisionAnchorPointerIdRef.current = e.pointerId;
+        precisionTapRef.current.press(performance.now(), e.clientX, e.clientY);
         const ch = clientToLogical(e.clientX, e.clientY - precisionCursorOffsetY());
         precisionCrosshairTargetRef.current = ch;
         precisionCrosshairDisplayRef.current = { ...ch };
@@ -8700,47 +9361,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
       }
 
-      // ── Data column HEADER drag + RESIZE corner (BEFORE pan) ─────────────
-      // Must run before shouldPan for exactly the reason the overlay endpoint
-      // drag above does. `panModeEnabledRef` makes shouldPan true at ANY zoom
-      // level, so with pan mode on the pan branch swallowed every pointer-down
-      // and the column could not be moved or resized at all — it was the LAST
-      // consumer in this handler, behind five earlier `return`s.
-      //
-      // Only the header and the resize corner are claimed here. The column ROW
-      // hit-testing deliberately stays below pan: rows cover the column BODY,
-      // and claiming that area early would steal pan drags that merely start
-      // over the column.
-      {
-        const mcItemsEarly = measurementColumnRef.current;
-        const canvasEarly = canvasRef.current;
-        if (mcItemsEarly !== null && canvasEarly) {
-          const cW = cssW(canvasEarly), cH = cssH(canvasEarly);
-          const s = mcScaleRef.current;
-          const mW = Math.round(MC_BASE_W * s);
-          const rowH = Math.round(22 * s);
-          const mH = mcItemsEarly.length > 0
-            ? mcItemsEarly.length * rowH + Math.round(28 * s)
-            : Math.round(48 * s);
-          const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
-          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
-          // Resize corner (bottom-right ~22px box) — checked first.
-          const rc = 22;
-          if (pos.x >= mX + mW - rc && pos.x <= mX + mW + 6 && pos.y >= mY + mH - rc && pos.y <= mY + mH + 6) {
-            mcResizingRef.current = { startX: pos.x, startY: pos.y, origScale: s };
-            isDraggingRef.current = true;
-            e.preventDefault();
-            return;
-          }
-          const headerH = Math.round(26 * s);
-          if (pos.x >= mX && pos.x <= mX + mW && pos.y >= mY && pos.y <= mY + headerH) {
-            mcDraggingRef.current = { startX: pos.x, startY: pos.y, origX: mcPosRef.current.x, origY: mcPosRef.current.y };
-            isDraggingRef.current = true;
-            e.preventDefault();
-            return;
-          }
-        }
-      }
+      // (Data column header drag + corner resize: handled at the top of this
+      // handler, before the precision anchor and before pan.)
 
       // If the pointer lands on the webcam PiP, preserve PiP drag/resize even
       // when pan mode is active.  We pre-check here so the PiP hit can veto
@@ -8777,7 +9399,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           (tool === 'zoom' && e.button === 0 && zoomed) ||
           // The pan tool, with its drag toggle on. Works at ANY zoom level —
           // no prior zoom-in required.
-          (tool === 'pan' && panModeEnabledRef.current)
+          (tool === 'pan' && panModeEnabledRef.current) ||
+          // The hand toggle in the zoom controls: drag the video at any time, whatever tool is armed.
+          (handPanActiveRef.current && e.button === 0)
         );
       if (shouldPan) {
         isPanningRef.current = true;
@@ -8786,74 +9410,8 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // ── Measurement column drag (header) + resize (corner) ───────────
-      const mcItemsNow = measurementColumnRef.current;
-      if (mcItemsNow !== null) {
-        const canvas = canvasRef.current;
-        if (canvas) {
-          const cW = cssW(canvas), cH = cssH(canvas);
-          const s = mcScaleRef.current;
-          const mW = Math.round(MC_BASE_W * s);
-          const rowH = Math.round(22 * s);
-          const mH = mcItemsNow.length > 0 ? mcItemsNow.length * rowH + Math.round(28 * s) : Math.round(48 * s);
-          const mX = Math.min(mcPosRef.current.x * cW, cW - mW - 4);
-          const mY = Math.min(mcPosRef.current.y * cH, cH - mH - 4);
-          // NOTE: the header drag and the resize corner are hit-tested EARLIER,
-          // above the pan branch (see "Data column HEADER drag + RESIZE corner"),
-          // because pan mode swallowed them here. Only row hit-testing remains.
-          // Click on a column row → highlight the matching AI line (make it the
-          // active, sole drag target) so the coach picks WHICH line to edit.
-          // Long-press / second click still opens the numeric edit prompt.
-          if (mcItemsNow.length > 0) {
-            // Rows render with the text BASELINE at mY + 28*s + i*rowH (fillText
-            // draws UPWARD from the baseline, render at 5088). The old floor-from-
-            // top band was off by one — a click on a row's text resolved to the
-            // row ABOVE it. Round to the nearest rendered baseline so a click
-            // anywhere on row i's text/value selects row i.
-            const rowIdx = Math.round((pos.y - (mY + Math.round(28 * s))) / rowH);
-            if (pos.x >= mX && pos.x <= mX + mW && rowIdx >= 0 && rowIdx < mcItemsNow.length) {
-              const item = mcItemsNow[rowIdx];
-              // Delete-mode: a row-click removes that measurement.
-              if (columnDeleteModeRef.current && onMeasurementItemDeleteRef.current) {
-                onMeasurementItemDeleteRef.current(item.id);
-                e.preventDefault();
-                return;
-              }
-              // Map the measurement to its overlay line by its STABLE id prefix
-              // (ai-sa/ha/hd/lf/rf/ra), NOT a label substring. Substring matching
-              // mis-routed 'Shoulder-Hip Diff' (contains "shoulder") and
-              // 'Foot Distance' (contains "foot") onto real lines, and rows with no
-              // overlay (elbow/knee interior angles, diff, ruler) matched loosely.
-              // The id prefix is unambiguous and collision-free.
-              const OVERLAY_BY_ID: Record<string, string> = {
-                sa: 'shoulder', ha: 'hip', hd: 'head', lf: 'lfoot', rf: 'rfoot', ra: 'racket',
-              };
-              const oid = item.id.startsWith('ai-')
-                ? (OVERLAY_BY_ID[item.id.split('-')[1]] ?? null)
-                : null;
-              if (oid && showMeasurementOverlaysRef.current) {
-                // Toggle: clicking the already-active line clears the selection.
-                activeOverlayIdRef.current = activeOverlayIdRef.current === oid ? null : oid;
-                renderDirtyRef.current = true;
-                e.preventDefault();
-                return;
-              }
-              // No matching line (e.g. a note or diff row): fall back to numeric edit.
-              if (onMeasurementItemEdit && (item.unit || item.value !== 0)) {
-                const newVal = prompt(`Edit ${item.label}:`, String(item.value));
-                if (newVal !== null && newVal.trim() !== '') {
-                  const parsed = parseFloat(newVal);
-                  if (!isNaN(parsed)) {
-                    onMeasurementItemEdit(item.id, parsed);
-                    e.preventDefault();
-                    return;
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+      // The column's header, body and resize corner are hit-tested EARLIER (see "Data column header drag / corner resize");
+      // a tap on a row runs in onPointerUp (columnRowPress), so pressing a row no longer swallows a drag.
 
       // ── Skeleton TOOL: one-shot click to set + lock focus ──────────────
       // Active-session clicks (the "NO — click player" flow) are consumed
@@ -9103,6 +9661,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // PRECISION_HOLD_SLOP_PX cancels it in onPointerMove, and lift/cancel
       // cancels it too. Touch only: precision mode itself is mobile-only, and a
       // held mouse button means something else.
+      if (e.pointerType === 'touch' && !precisionTouchDrawRef.current && !precisionHoldRef.current) {
+        // TEMP-DEBUG-POSE: say why a hold is NOT armed (the phone test could not tell the reasons apart)
+        if (!onPrecisionHoldActivateRef.current) poseDbg.event('precision hold (canvas) not armed: precision is not offered on this device (needs the mobile layout and a coarse pointer)');
+        else if (!PRECISION_HOLD_TOOLS.has(tool)) poseDbg.event(`precision hold (canvas) not armed: the ${tool} tool has no hold (only the placement tools do; freehand tools use the toolbar toggle)`);
+      }
       if (
         e.pointerType === 'touch' &&
         !precisionTouchDrawRef.current &&
@@ -9110,6 +9673,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         PRECISION_HOLD_TOOLS.has(tool)
       ) {
         cancelPrecisionHold();
+        poseDbg.event(`precision hold (canvas) armed on ${tool}`); // TEMP-DEBUG-POSE
         const holdClientX = e.clientX;
         const holdClientY = e.clientY;
         const holdPointerId = e.pointerId;
@@ -9121,6 +9685,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           lastY: holdClientY,
           timer: setTimeout(() => {
             precisionHoldRef.current = null;
+            poseDbg.event('precision hold (canvas) fired'); // TEMP-DEBUG-POSE
             // The still hold was about to commit a dot — discard it.
             activeStrokeRef.current = null;
             isDraggingRef.current = false;
@@ -9139,6 +9704,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         };
       }
 
+      // Text on a finger: the browser's compatibility mousedown arrives after the
+      // finger LIFTS (100–200 ms on a phone), after the draft's focus guard, and its
+      // default moves focus to the canvas: the box blurred, committed empty and
+      // vanished. Cancelling the pointerdown suppresses those mouse events.
+      if (tool === 'text' && e.pointerType !== 'mouse') e.preventDefault();
       beginDrawToolAt(pos, lw);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [beginDrawToolAt, eraseAt, videoRef, webcamPipHitTest, beginWebcamPipDragAt, getPosFromPointerEvent, tryStartWebcamPinch, rollbackTentativeGesture, cancelPrecisionHold]);
@@ -9156,7 +9726,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         const step = Math.hypot(e.clientX - hold.lastX, e.clientY - hold.lastY);
         const travel = Math.hypot(e.clientX - hold.clientX, e.clientY - hold.clientY);
         if (step > PRECISION_HOLD_SLOP_PX || travel > PRECISION_HOLD_MAX_TRAVEL_PX) {
-          cancelPrecisionHold();
+          cancelPrecisionHold(step > PRECISION_HOLD_SLOP_PX
+            ? `moved ${Math.round(step)} px in one step (limit ${PRECISION_HOLD_SLOP_PX})`
+            : `drifted ${Math.round(travel)} px from the press (limit ${PRECISION_HOLD_MAX_TRAVEL_PX})`);
         } else {
           // Still holding — advance the reference so a slow settle does not
           // accumulate into a false cancel.
@@ -9177,8 +9749,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       // ── Measurement column resize (corner drag) ──────────────────────
       if (mcResizingRef.current && isDraggingRef.current) {
         const r = mcResizingRef.current;
+        const scr = getPosFromPointerEvent(e); // screen space, like the column itself
         // Diagonal drag: right/down enlarges. Scale range 0.6×–2.5×.
-        const delta = ((pos.x - r.startX) + (pos.y - r.startY)) / 2;
+        const delta = ((scr.x - r.startX) + (scr.y - r.startY)) / 2;
         mcScaleRef.current = Math.max(0.6, Math.min(2.5, r.origScale + delta / MC_BASE_W));
         renderDirtyRef.current = true;
         return;
@@ -9188,12 +9761,20 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (mcDraggingRef.current && isDraggingRef.current) {
         const canvas = canvasRef.current;
         if (canvas) {
-          const dx = pos.x - mcDraggingRef.current.startX;
-          const dy = pos.y - mcDraggingRef.current.startY;
-          mcPosRef.current = {
-            x: Math.max(0, Math.min(0.9, mcDraggingRef.current.origX + dx / cssW(canvas))),
-            y: Math.max(0, Math.min(0.9, mcDraggingRef.current.origY + dy / cssH(canvas))),
-          };
+          const scr = getPosFromPointerEvent(e); // screen space, like the column itself
+          const dx = scr.x - mcDraggingRef.current.startX;
+          const dy = scr.y - mcDraggingRef.current.startY;
+          if (mcTapRef.current && Math.hypot(dx, dy) > 6) mcTapRef.current.moved = true;
+          // Kept inside the canvas, black bars included (lib/drawingTools.ts clampColumnPos); the generated video keeps it inside the frame.
+          const cW = cssW(canvas), cH = cssH(canvas);
+          const n = measurementColumnRef.current?.length ?? 0;
+          const sc = mcScaleRef.current;
+          const mW = Math.round(MC_BASE_W * sc);
+          const mH = n > 0 ? n * Math.round(22 * sc) + Math.round(28 * sc) : Math.round(48 * sc);
+          mcPosRef.current = clampColumnPos(
+            { x: mcDraggingRef.current.origX + dx / cW, y: mcDraggingRef.current.origY + dy / cH },
+            { w: mW, h: mH }, { w: cW, h: cH }, videoBoundsRef.current,
+          );
           renderDirtyRef.current = true;
         }
         return;
@@ -9230,6 +9811,16 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
+      // ── Precision: the second finger (commit tap) never moves anything ─────
+      if (
+        precisionAnchorPointerIdRef.current !== null &&
+        e.pointerId !== precisionAnchorPointerIdRef.current &&
+        e.pointerType === 'touch'
+      ) {
+        e.preventDefault();
+        return;
+      }
+
       // ── Precision anchor move: reposition crosshair (offset owned here) ────
       if (
         precisionAnchorPointerIdRef.current === e.pointerId &&
@@ -9242,7 +9833,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         renderDirtyRef.current = true;
         e.preventDefault();
         // Between a two-step shape's begin and commit taps, the endpoint tracks
-        // the crosshair. Pen dabs commit immediately, so there's nothing to drag.
+        // the crosshair; the pen draws freehand the same way (updateActiveStrokeAt appends a point).
         if (isDraggingRef.current && activeStrokeRef.current) {
           updateActiveStrokeAt(ch);
         }
@@ -9296,6 +9887,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             dy,
             dw,
             dh,
+            handPanActiveRef.current,
           );
           panXRef.current = c.x;
           panYRef.current = c.y;
@@ -9453,7 +10045,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
 
     const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
       // Lifting before the 2s elapses is an ordinary tap/stroke, never precision.
-      if (precisionHoldRef.current?.pointerId === e.pointerId) cancelPrecisionHold();
+      if (precisionHoldRef.current?.pointerId === e.pointerId) cancelPrecisionHold('finger lifted before 2 s');
       // ── Normalize: this pointer is gone ───────────────────────────────────
       activePointersRef.current.delete(e.pointerId);
       const remainingTouch = [...activePointersRef.current.values()].filter(
@@ -9472,7 +10064,10 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (mcDraggingRef.current) {
         mcDraggingRef.current = null;
         isDraggingRef.current = false;
-        onMeasurementColumnDrag?.(mcPosRef.current);
+        const tap = mcTapRef.current;
+        mcTapRef.current = null;
+        if (tap && !tap.moved) { columnRowPressRef.current({ x: tap.x, y: tap.y }); }
+        else onMeasurementColumnDrag?.(mcPosRef.current);
         try { (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId); } catch { /* noop */ }
         return;
       }
@@ -9501,6 +10096,29 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         }
         precisionAnchorPointerIdRef.current = null;
         precisionFadeStartRef.current = performance.now();
+        if (precisionTapRef.current.lift(performance.now(), e.clientX, e.clientY)) {
+          precisionTapRef.current.cancel();
+          poseDbg.event('precision turned off: double-tap'); // TEMP-DEBUG-POSE
+          onPrecisionDeactivateRef.current?.();
+        }
+        try {
+          (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+
+      // ── Precision: the second finger lifting is only the end of a commit tap ──
+      // While the anchor finger is down, the second finger's press already acted (precisionCommitAt). Its
+      // lift must not fall through to the ordinary pointer-up, which finalises the active stroke: that ended
+      // every precision stroke the instant it was started (a zero-length mark per tap, so the pen and the
+      // two-step shapes never drew between the taps).
+      if (
+        precisionAnchorPointerIdRef.current !== null &&
+        e.pointerId !== precisionAnchorPointerIdRef.current &&
+        e.pointerType === 'touch'
+      ) {
         try {
           (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
         } catch {
@@ -9648,7 +10266,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
     // route here so the gesture lock is always released — the single teardown
     // that prevents stuck isDragging / activeStroke / pinch / pip state.
     const onPointerCancel = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (precisionHoldRef.current?.pointerId === e.pointerId) cancelPrecisionHold();
+      if (precisionHoldRef.current?.pointerId === e.pointerId) cancelPrecisionHold('pointercancel: the browser took the touch');
       activePointersRef.current.delete(e.pointerId);
       const remainingTouch = [...activePointersRef.current.values()].filter(
         (p) => p.pointerType === 'touch',
@@ -9658,6 +10276,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         webcamPinchRef.current = null;
       }
       if (precisionAnchorPointerIdRef.current === e.pointerId) {
+        precisionTapRef.current.cancel();
         precisionAnchorPointerIdRef.current = null;
         precisionFadeStartRef.current = performance.now();
       }
@@ -9720,16 +10339,9 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
         return;
       }
 
-      // Pen: each tap is a single dab (begin + commit immediately).
-      if (tool === 'pen') {
-        beginDrawToolAt(ch, baseLw);
-        const pen = activeStrokeRef.current as StrokePen | null;
-        if (pen?.tool === 'pen' && pen.pts.length === 1) {
-          pen.pts.push({ ...ch });
-        }
-        commitActiveStroke();
-        return;
-      }
+      // Pen: like the two-step shapes below. The first tap starts the freehand line at the crosshair, the
+      // anchor finger then draws it (onPointerMove appends a point per move), the next tap or lifting the
+      // anchor ends it. A single start/stop tap with no movement still leaves one dot, as the old dab did.
 
       // Two-step drag tools (line/arrow/arrowAngle/circle/bodyCircle/rect/triangle):
       // first tap begins at the crosshair, second tap finalizes at the crosshair.
@@ -10050,7 +10662,11 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
       if (webcamActive && webcamPipMobileChrome) queuePipUiSync();
     }, [webcamActive, webcamPipMobileChrome, queuePipUiSync]);
 
-    const zoomBtnSize = precisionTouchDraw ? 32 : 36;
+    // A phone held sideways in a browser leaves ~250 px of height: the bottom-anchored zoom column then
+    // runs off the top of the screen (help, +, − at negative y). On short screens it becomes a row under
+    // the +B / trash row instead, with slightly smaller buttons.
+    const shortScreen = containerHeight > 0 && containerHeight < 420;
+    const zoomBtnSize = compareMode ? 30 : shortScreen || precisionTouchDraw ? 32 : 36;
 
     const zoomControlBtnStyle: React.CSSProperties = {
       width: zoomBtnSize,
@@ -10127,7 +10743,7 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
             cursor:
               activeTool === 'objectMultiplier'
                 ? 'default'
-                : (activeTool === 'pan' && panModeEnabled)
+                : ((activeTool === 'pan' && panModeEnabled) || handPanActive)
                   ? (isPanningRef.current ? 'grabbing' : 'grab')
                   : (cursorFor[activeTool] ?? 'default'),
           }}
@@ -10370,16 +10986,18 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           data-tour-id="tour-zoom"
           style={{
             position: 'absolute',
-            bottom: 'calc(var(--anglemotion-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))',
+            ...(shortScreen || compareMode
+              ? { top: 'calc(env(safe-area-inset-top, 0px) + 50px)' }
+              : { bottom: 'calc(var(--anglemotion-banner-bottom, 80px) + 12px + env(safe-area-inset-bottom, 0px))' }),
             right: 'calc(12px + env(safe-area-inset-right, 0px))',
             display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
+            flexDirection: shortScreen && !compareMode ? 'row' : 'column',
+            gap: shortScreen || compareMode ? 4 : 6,
             zIndex: 90,
             pointerEvents: 'auto',
           }}
         >
-          {showTourHelpInZoomCluster ? (
+          {showTourHelpInZoomCluster && !compareMode ? (
             <button
               type="button"
               data-tour-id="tour-help"
@@ -10449,11 +11067,27 @@ const CanvasOverlay = React.forwardRef<CanvasHandle, CanvasProps>(
           >
             ⌂
           </button>
+          {onHandPanToggle ? (
+            <button
+              type="button"
+              aria-label="Drag the video (hand)"
+              aria-pressed={handPanActive}
+              title={handPanActive ? 'Hand on: drag moves the video. Tap to go back to your tool.' : 'Hand: drag moves the video, with any tool'}
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={onHandPanToggle}
+              style={{
+                ...zoomControlBtnStyle,
+                background: handPanActive ? 'var(--cl-accent, #007AFF)' : zoomControlBtnStyle.background,
+              }}
+            >
+              <Hand size={18} strokeWidth={2.25} aria-hidden />
+            </button>
+          ) : null}
         </div>
         {/* One-tap way back from any canvas zoom, top-left under the top bar:
             the bottom-right ⌂ can be under a fixed banner (iOS "Add to Home
             Screen") at 375 px. */}
-        {zoomedUi ? (
+        {zoomedUi && !compareMode ? (
           <button
             type="button"
             data-testid="zoom-reset-pill"

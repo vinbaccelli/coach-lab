@@ -10,6 +10,7 @@ import { countExportReadyFrames, countMaskPixels, maskHasContent, statusAfterMas
 import { hydrateDraftBitmapsForExport } from '@/lib/stroMotionDraft/exportDraft';
 import { ensureStroMotionDraft } from '@/lib/stroMotionDraft/initDraft';
 import { proposeFrameMask } from '@/lib/stroMotionDraft/proposeFrameMask';
+import { runWithWatchdog } from '@/lib/stroMotionDraft/frameWatchdog';
 // The SAM embedding-cache key, for the auto-racket add-on below. Imported from
 // samRacketKey (no imports, no state) rather than samRacket, so this hook carries
 // none of the SAM session, encoder or decoder code — those stay behind the
@@ -64,6 +65,9 @@ export interface StroAutoRunSummary {
   elapsedMs: number;
   finishedAt: number;
 }
+
+/** Longest one phone frame's background removal may take before it is restarted (normal is seconds). */
+const PHONE_FRAME_TIMEOUT_MS = 180_000;
 
 export interface StroMotionProgress {
   current: number;
@@ -913,7 +917,9 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
       recordStage(`Auto-detect: removing background, frame ${i + 1}/${specs.length}`);
       if (frame) {
         try {
-          const proposal = await proposeFrameMask(
+          // PHONE: a person-segmenter step that never returns froze the pass for 30+ minutes on a real iPhone. Limit it, restart the
+          // segmenter once, retry once, then skip the frame (the catch below) so the rest of the pass still runs. Elsewhere: unchanged.
+          const runProposal = () => proposeFrameMask(
             video,
             frame.timeSec,
             spec.selectionBox,
@@ -934,6 +940,13 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
             unitFloorNorm,
             capSize ? proc : null,
           );
+          const proposal = phone
+            ? await runWithWatchdog(runProposal, {
+                timeoutMs: PHONE_FRAME_TIMEOUT_MS,
+                onTimeout: (n) => recordStage(`Auto-detect: removing background, frame ${i + 1} timed out (try ${n}/2)`),
+                recover: async () => { const { releaseSelfieSegmenter } = await import('@/lib/stroMotionDraft/selfieSegmenter'); await releaseSelfieSegmenter(); },
+              })
+            : await runProposal();
           // A non-null proposal has TAKEN the bitmap: it comes back as
           // `proposal.sourceFrame` and is closed by the commit below or by the
           // empty-mask branch. Anything still unclaimed after the loop is ours to
@@ -1050,6 +1063,14 @@ export function useStroMotion(videoRef: React.RefObject<HTMLVideoElement | null>
         // Yield so the paint loop keeps running through the SAM encodes.
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
+    }
+
+    // The SAM worker (phones) is done: terminating it returns its whole heap. No-op when the in-page path ran.
+    if (racketPassActive) {
+      try {
+        const { finishRacketSegmentation } = await import('@/lib/stroMotionDraft/autoRacketPass');
+        finishRacketSegmentation();
+      } catch { /* best-effort */ }
     }
 
     // Phone: SAM-2 and its embeddings are done for this pass; release them, then scale
