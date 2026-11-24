@@ -88,7 +88,7 @@ export default function LoginClient({ redirect }: { redirect: string }) {
 
           <p className="lg-fine">
             By continuing you agree to store your videos as Unlisted in your YouTube account when
-            importing from URLs.
+            you upload them from AngleMotion.
           </p>
 
           <div className="lg-links">
@@ -129,7 +129,7 @@ const CSS = `
 
 .lg-bar {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  padding: 14px clamp(20px, 5vw, 56px);
+  padding: calc(14px + env(safe-area-inset-top, 0px)) clamp(20px, 5vw, 56px) 14px;
   border-bottom: 1px solid var(--cl-border-subtle);
 }
 .lg-wordmark {

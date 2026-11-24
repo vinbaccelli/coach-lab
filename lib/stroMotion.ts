@@ -367,6 +367,40 @@ export function enforceMonotonicSampleTimes(
   });
 }
 
+/**
+ * Move ONE frame stop. It can be dragged anywhere inside the trim, including past other stops (the
+ * order is decided at Generate time, by time); every other stop stays exactly where the coach put it.
+ * Two stops are never allowed on the same instant: a stop that would land within `minGap` of another
+ * is placed just on the side it came from.
+ */
+export function moveSampleTime(
+  times: number[],
+  index: number,
+  wanted: number,
+  trimStartSec: number,
+  trimEndSec: number,
+): number[] {
+  if (index < 0 || index >= times.length) return times;
+  const span = trimEndSec - trimStartSec;
+  const minGap = span > 0 ? Math.min(0.04, span / (times.length * 3)) : 0.01;
+  const from = times[index];
+  let t = Math.max(trimStartSec, Math.min(trimEndSec, wanted));
+  for (let pass = 0; pass <= times.length; pass++) {
+    const hit = times.findIndex((o, k) => k !== index && Math.abs(o - t) < minGap);
+    if (hit < 0) break;
+    t = from <= times[hit] ? times[hit] - minGap : times[hit] + minGap;
+    t = Math.max(trimStartSec, Math.min(trimEndSec, t));
+  }
+  const next = [...times];
+  next[index] = Math.round(t * 1000) / 1000;
+  return next;
+}
+
+/** Keep every sample time inside the trim WITHOUT reordering or moving the others (used when the trim handles move). */
+export function clampSampleTimes(times: number[], trimStartSec: number, trimEndSec: number): number[] {
+  return times.map((t) => Math.round(Math.max(trimStartSec, Math.min(trimEndSec, t)) * 1000) / 1000);
+}
+
 function subjectBoxPixels(
   box: StroMotionSubjectBox,
   videoWidth: number,
@@ -1232,6 +1266,27 @@ export function canvasSupportsVideoExport(canvas: HTMLCanvasElement): boolean {
   return typeof canvas.captureStream === 'function';
 }
 
+/** iPhone / iPad (also iPadOS that reports a Mac UA but has "Mobile" in it). Every browser on iOS is WebKit. */
+export function isIosUserAgent(userAgent: string): boolean {
+  return /iPhone|iPad|iPod/i.test(userAgent) || (/Macintosh/i.test(userAgent) && /Mobile/i.test(userAgent));
+}
+
+/**
+ * MediaRecorder container for the Motion Layer video. iPhones/iPads (every browser there is WebKit) CAN record WebM on recent iOS, but
+ * the Files app / Photos / Messages cannot open a WebM, so a coach saved a file that would not play (real iPhone, 2026-11-10). On iOS prefer
+ * MP4 (H.264) whenever the recorder offers it; everywhere else keep WebM first as before.
+ */
+export function pickStroVideoMime(isSupported: (t: string) => boolean, userAgent: string): string {
+  const ios = isIosUserAgent(userAgent);
+  const mp4 = ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4'];
+  if (ios) {
+    for (const t of mp4) if (isSupported(t)) return t;
+  }
+  if (isSupported('video/webm;codecs=vp9')) return 'video/webm;codecs=vp9';
+  if (isSupported('video/webm')) return 'video/webm';
+  return 'video/mp4';
+}
+
 export async function exportStroMotionVideo(
   canvasEl: HTMLCanvasElement,
   options: {
@@ -1253,11 +1308,7 @@ export async function exportStroMotionVideo(
   } = options;
   if (frameCount <= 0) return null;
 
-  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-    ? 'video/webm;codecs=vp9'
-    : MediaRecorder.isTypeSupported('video/webm')
-      ? 'video/webm'
-      : 'video/mp4';
+  const mimeType = pickStroVideoMime((t) => MediaRecorder.isTypeSupported(t), typeof navigator !== 'undefined' ? navigator.userAgent : '');
 
   const stream = canvasEl.captureStream(30);
   const recorder = new MediaRecorder(stream, { mimeType });

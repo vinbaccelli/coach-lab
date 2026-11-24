@@ -1,5 +1,6 @@
 import CoachPublicProfile from '@/components/coach/CoachPublicProfile';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { sanitizeSubscriptionOffer } from '@/lib/analysisPricing';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,7 @@ interface CoachProfileRow {
   bio: string | null;
   avatar_url: string | null;
   accent_color: string | null;
+  subscription_offer?: unknown;
 }
 
 interface CoachServiceRow {
@@ -62,6 +64,7 @@ export default async function CoachPage({ params }: { params: Promise<{ slug: st
           bio: profile.bio ?? '',
           avatarUrl: profile.avatar_url ?? undefined,
           accentColor: profile.accent_color ?? '#007AFF',
+          subscription: sanitizeSubscriptionOffer(profile.subscription_offer),
           services: services.map(s => ({
             id: s.id,
             title: s.title,
