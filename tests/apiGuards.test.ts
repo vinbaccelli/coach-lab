@@ -15,6 +15,8 @@ const GUARDS: Array<[file: string, method: string, feature: keyof typeof FEATURE
   // DELETE /api/players/[id] is deliberately NOT here: a coach who stopped paying must still be able
   // to delete their players. tests/deletePlayer.test.ts pins that it has no requireFeature.
   ['app/api/players/[id]/entries/route.ts', 'POST', 'players'],
+  ['app/api/players/[id]/entries/[entryId]/route.ts', 'PATCH', 'players'],
+  ['app/api/players/[id]/entries/[entryId]/route.ts', 'DELETE', 'players'],
   ['app/api/players/[id]/sessions/route.ts', 'POST', 'players'],
   ['app/api/players/[id]/sessions/[sessionId]/route.ts', 'PATCH', 'players'],
   ['app/api/players/[id]/sessions/[sessionId]/route.ts', 'DELETE', 'players'],
