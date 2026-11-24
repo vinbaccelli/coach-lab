@@ -33,52 +33,53 @@ const base: SaveScreenshotInput = {
   fileName: 'Ana-1.png',
 };
 const DRIVE = 'https://drive.google.com/uc?export=view&id=FILEID1234567';
-const SUPABASE = 'https://x.supabase.co/storage/v1/object/public/player-assets/u/screenshots/1.png';
 
 test('in-app success: Drive upload, entry saved, no Google Doc call, link to the report', async () => {
   const { fn, calls } = fakeFetch({
     '/api/google/upload-image': () => json(200, { url: DRIVE }),
     '/entries': () => json(200, { entry: { id: 'e9' } }),
   });
-  let fallbackUsed = false;
-  const r = await saveScreenshotToPlayer(base, { fetchFn: fn, uploadFallback: async () => ((fallbackUsed = true), SUPABASE) });
+  const r = await saveScreenshotToPlayer(base, { fetchFn: fn });
   assert.ok(r.ok);
   if (!r.ok) return;
   assert.equal(r.storage, 'drive');
   assert.equal(r.imageUrl, DRIVE);
   assert.equal(r.linkUrl, '/players/p1/reports/e9');
   assert.equal(r.message, 'Saved to report — Ana');
-  assert.equal(fallbackUsed, false);
   assert.ok(!calls.some((c) => c.url.includes('google-doc')), 'no Google Doc write');
   const entry = calls.find((c) => c.url.endsWith('/entries'))!.body as Record<string, unknown>;
   assert.equal(entry.category, 'technique');
   assert.deepEqual(entry.screenshots, [DRIVE]);
 });
 
-test('in-app: Drive upload fails (500) -> Supabase fallback, saved, and says why', async () => {
+test('in-app: Drive upload fails (500) -> nothing is saved, the reason is shown, and the capture is kept for a retry', async () => {
   const { fn, calls } = fakeFetch({
     '/api/google/upload-image': () => json(500, { error: 'Drive storage is full' }),
     '/entries': () => json(200, { entry: { id: 'e1' } }),
   });
-  const r = await saveScreenshotToPlayer(base, { fetchFn: fn, uploadFallback: async () => SUPABASE });
-  assert.ok(r.ok);
-  if (!r.ok) return;
-  assert.equal(r.storage, 'supabase');
-  assert.equal(r.imageUrl, SUPABASE);
-  assert.equal(r.driveError, 'Drive storage is full');
-  assert.match(r.message, /Saved to report/);
+  const r = await saveScreenshotToPlayer(base, { fetchFn: fn });
+  assert.equal(r.ok, false);
   assert.match(r.message, /Drive storage is full/);
-  assert.deepEqual((calls.find((c) => c.url.endsWith('/entries'))!.body as { screenshots: string[] }).screenshots, [SUPABASE]);
+  assert.match(r.message, /screenshot is kept/i);
+  assert.equal((r as { reconnect?: boolean }).reconnect, undefined, 'a full Drive is not fixed by reconnecting');
+  assert.ok(!calls.some((c) => c.url.endsWith('/entries')), 'no entry, so no broken report');
+  // No second storage is tried: only the Drive route is ever called.
+  assert.deepEqual(calls.map((c) => c.url), ['/api/google/upload-image']);
 });
 
-test('in-app: Google token missing (403) -> Supabase fallback, and the network throwing does too', async () => {
-  const forbidden = fakeFetch({
-    '/api/google/upload-image': () => json(403, { error: 'Google access not granted — sign out and sign in again' }),
-    '/entries': () => json(200, { entry: { id: 'e2' } }),
-  });
-  const a = await saveScreenshotToPlayer(base, { fetchFn: forbidden.fn, uploadFallback: async () => SUPABASE });
-  assert.ok(a.ok && a.storage === 'supabase');
-  assert.match((a as { message: string }).message, /sign out and sign in again/);
+test('in-app: Google not connected / refused -> "Reconnect Google Drive" is offered, nothing saved; the network throwing is a plain retry', async () => {
+  for (const [status, code] of [[403, 'google_not_connected'], [401, 'google_reauth']] as const) {
+    const { fn, calls } = fakeFetch({
+      '/api/google/upload-image': () => json(status, { error: 'Google access not granted — sign out and sign in again.', code }),
+      '/entries': () => json(200, { entry: { id: 'e2' } }),
+    });
+    const a = await saveScreenshotToPlayer(base, { fetchFn: fn });
+    assert.equal(a.ok, false);
+    assert.equal((a as { reconnect?: boolean }).reconnect, true, code);
+    assert.match(a.message, /Reconnect it/);
+    assert.match(a.message, /screenshot is kept/i);
+    assert.ok(!calls.some((c) => c.url.endsWith('/entries')));
+  }
 
   const offline = fakeFetch({
     '/api/google/upload-image': () => {
@@ -86,18 +87,34 @@ test('in-app: Google token missing (403) -> Supabase fallback, and the network t
     },
     '/entries': () => json(200, { entry: { id: 'e3' } }),
   });
-  const b = await saveScreenshotToPlayer(base, { fetchFn: offline.fn, uploadFallback: async () => SUPABASE });
-  assert.ok(b.ok && b.storage === 'supabase' && b.driveError === 'Failed to fetch');
+  const b = await saveScreenshotToPlayer(base, { fetchFn: offline.fn });
+  assert.equal(b.ok, false);
+  assert.match(b.message, /Failed to fetch/);
+  assert.equal((b as { reconnect?: boolean }).reconnect, undefined);
+  assert.ok(!offline.calls.some((c) => c.url.endsWith('/entries')));
 });
 
-test('in-app: both uploads fail -> failure with the real reason, no entry written', async () => {
+test('a retry after a Drive failure saves with the SAME capture (no second capture needed)', async () => {
+  let attempt = 0;
   const { fn, calls } = fakeFetch({
-    '/api/google/upload-image': () => json(403, { error: 'Google access not granted' }),
+    '/api/google/upload-image': () => (++attempt === 1 ? json(500, { error: 'Drive busy' }) : json(200, { url: DRIVE })),
+    '/entries': () => json(200, { entry: { id: 'e7' } }),
   });
-  const r = await saveScreenshotToPlayer(base, { fetchFn: fn, uploadFallback: async () => null });
+  const first = await saveScreenshotToPlayer(base, { fetchFn: fn });
+  assert.equal(first.ok, false);
+  const second = await saveScreenshotToPlayer(base, { fetchFn: fn });
+  assert.ok(second.ok);
+  const uploads = calls.filter((c) => c.url.endsWith('/upload-image')).map((c) => (c.body as { dataUrl: string }).dataUrl);
+  assert.deepEqual(uploads, [base.dataUrl, base.dataUrl]);
+  assert.equal(calls.filter((c) => c.url.endsWith('/entries')).length, 1, 'exactly one entry, after the successful upload');
+});
+
+test('Google exports off + in-app: nothing is saved and no Drive call is made (no Supabase fallback)', async () => {
+  const { fn, calls } = fakeFetch({ '/entries': () => json(200, { entry: { id: 'e4' } }) });
+  const r = await saveScreenshotToPlayer({ ...base, googleExports: false }, { fetchFn: fn });
   assert.equal(r.ok, false);
-  assert.match(r.message, /Google access not granted/);
-  assert.ok(!calls.some((c) => c.url.endsWith('/entries')), 'nothing is saved after a failed upload');
+  assert.match(r.message, /needs Google Drive/);
+  assert.equal(calls.length, 0);
 });
 
 test('in-app: the entry save failing is reported with the server reason, never as success', async () => {
@@ -105,16 +122,9 @@ test('in-app: the entry save failing is reported with the server reason, never a
     '/api/google/upload-image': () => json(200, { url: DRIVE }),
     '/entries': () => json(403, { error: 'plan_required' }),
   });
-  const r = await saveScreenshotToPlayer(base, { fetchFn: fn, uploadFallback: async () => SUPABASE });
+  const r = await saveScreenshotToPlayer(base, { fetchFn: fn });
   assert.equal(r.ok, false);
   assert.match(r.message, /plan_required/);
-});
-
-test('Google exports off + in-app: straight to Supabase, no Drive call', async () => {
-  const { fn, calls } = fakeFetch({ '/entries': () => json(200, { entry: { id: 'e4' } }) });
-  const r = await saveScreenshotToPlayer({ ...base, googleExports: false }, { fetchFn: fn, uploadFallback: async () => SUPABASE });
-  assert.ok(r.ok && r.storage === 'supabase');
-  assert.ok(!calls.some((c) => c.url.includes('upload-image')));
 });
 
 test('switch OFF: Drive upload, entry, then the Google Doc append — messages unchanged', async () => {
@@ -124,7 +134,7 @@ test('switch OFF: Drive upload, entry, then the Google Doc append — messages u
     '/entries': () => json(200, { entry: { id: 'e5' } }),
     '/google-doc': () => json(200, { documentId: 'D', url: 'https://docs.google.com/document/d/D/edit' }),
   });
-  const a = await saveScreenshotToPlayer(off, { fetchFn: ok.fn, uploadFallback: async () => SUPABASE });
+  const a = await saveScreenshotToPlayer(off, { fetchFn: ok.fn });
   assert.ok(a.ok);
   if (a.ok) {
     assert.equal(a.message, 'Saved to Ana + Google Doc');
@@ -138,19 +148,19 @@ test('switch OFF: Drive upload, entry, then the Google Doc append — messages u
     '/entries': () => json(200, { entry: { id: 'e6' } }),
     '/google-doc': () => json(403, { error: 'Google access not granted' }),
   });
-  const b = await saveScreenshotToPlayer(off, { fetchFn: docFails.fn, uploadFallback: async () => SUPABASE });
+  const b = await saveScreenshotToPlayer(off, { fetchFn: docFails.fn });
   assert.ok(b.ok);
   assert.equal(b.message, 'Saved to Ana — Google Doc failed: Google access not granted');
 
   const uploadDown = fakeFetch({ '/api/google/upload-image': () => json(500, { error: 'x' }) });
-  const c = await saveScreenshotToPlayer(off, { fetchFn: uploadDown.fn, uploadFallback: async () => null });
+  const c = await saveScreenshotToPlayer(off, { fetchFn: uploadDown.fn });
   assert.deepEqual(c, { ok: false, message: 'Upload failed — try again' });
 
   const entryDown = fakeFetch({
     '/api/google/upload-image': () => json(200, { url: DRIVE }),
     '/entries': () => json(500, { error: 'boom' }),
   });
-  const d = await saveScreenshotToPlayer(off, { fetchFn: entryDown.fn, uploadFallback: async () => SUPABASE });
+  const d = await saveScreenshotToPlayer(off, { fetchFn: entryDown.fn });
   assert.deepEqual(d, { ok: false, message: 'Failed to save screenshot — try again' });
 });
 
@@ -204,19 +214,19 @@ test('the decoder save sends the structured report in metadata; the stage callba
     '/api/google/upload-image': () => json(200, { url: DRIVE }),
     '/entries': () => json(200, { entry: { id: 'e1' } }),
   });
-  await saveScreenshotToPlayer(base, { fetchFn: fn, uploadFallback: async () => SUPABASE, onStage: (s) => stages.push(s) });
+  await saveScreenshotToPlayer(base, { fetchFn: fn, onStage: (s) => stages.push(s) });
   assert.deepEqual(stages, ['uploading', 'saving']);
 });
 
 // ── New player created inline in the analysis picker, then the screenshot saved to it ──────────
 
 /** What the picker does for "Create new player" + Save: create, then save to the id that came back. */
-async function createAndSave(fetchFn: typeof fetch, name: string, fallback: () => Promise<string | null> = async () => SUPABASE) {
+async function createAndSave(fetchFn: typeof fetch, name: string) {
   const created = await createPlayer(fetchFn, name);
   if (!created.ok) return { created, result: null };
   const result = await saveScreenshotToPlayer(
     { ...base, playerId: created.player.id, playerName: created.player.display_name },
-    { fetchFn, uploadFallback: fallback },
+    { fetchFn },
   );
   return { created, result };
 }
@@ -285,7 +295,7 @@ test('new player: a 2xx entry reply with no entry is NOT shown as saved', async 
       '/api/google/upload-image': () => json(200, { url: DRIVE }),
       '/entries': reply,
     });
-    const r = await saveScreenshotToPlayer({ ...base, playerId: 'NEW-1' }, { fetchFn: fn, uploadFallback: async () => SUPABASE });
+    const r = await saveScreenshotToPlayer({ ...base, playerId: 'NEW-1' }, { fetchFn: fn });
     assert.equal(r.ok, false);
     assert.match(r.message, /Not confirmed/);
   }
