@@ -2508,3 +2508,17 @@ So RTMPose adds about 160–190 MB resident here. It is never released while AI 
 **Fault assessment.** Mine (PR C layout): a daily action was put behind a tab that a phone hides.
 
 **Severity.** High (a daily action looked gone), fixed.
+
+## 085 — FFmpeg core used for MP4 conversion is a GPL build; a second, mislabelled core version sits in dead code
+
+**Found:** 2026-11-24, licensing second pass (docs only, nothing changed).
+
+**Symptom.** Licence metadata says `@ffmpeg/core` 0.12.6 is MIT and 0.12.10 is GPL-2.0-or-later; the first-pass audit recorded both.
+
+**Verified root cause.** The FFmpeg `configure` line compiled into both wasm binaries is identical and includes `--enable-gpl --enable-libx264 --enable-libx265` (`docs/evidence/ffmpeg-core-0.12.{6,10}-wasm-embedded-build-config.txt`). Production loads only 0.12.10 from jsDelivr (`lib/ffmpegWebmToMp4.ts:10-11`) and calls `libx264` first on every conversion (`:148,156,249,257`). The 0.12.6 loader (`components/ExportModal.tsx:25,143`) and `components/ScreenRecorder.tsx` are not imported anywhere (absent from the production bundle).
+
+**Fault assessment.** Not a code bug; a licensing/provenance risk and dead code. Pre-existing.
+
+**Proposed fix.** See `docs/FFMPEG_LICENSE_REVIEW.md` §4 (E-F1 replace with WebCodecs + mediabunny; E-F3 delete the dead code). Awaiting the owner's and counsel's decision.
+
+**Severity.** High (licensing), pending counsel.

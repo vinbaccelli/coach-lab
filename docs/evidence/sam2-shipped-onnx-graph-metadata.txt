@@ -1,0 +1,16 @@
+# Read 2026-11-24 with onnx (pip, scratch venv) onnx.load(load_external_data=False) from the shipped files
+public/models/sam2/onnx/vision_encoder_q4f16.onnx
+  ir_version 8 producer pytorch 2.9.0 opset_import [('ai.onnx', 18), ('com.microsoft', 1)]
+  inputs ['pixel_values']
+  outputs ['image_embeddings.0', 'image_embeddings.1', 'image_embeddings.2']
+  metadata_props []
+  MatMulNBits nodes 51  total nodes 748
+  first initializer names ['model.vision_encoder.backbone.patch_embed.projection.weight', 'model.vision_encoder.backbone.patch_embed.projection.bias', '/Constant_12_output_0']
+public/models/sam2/onnx/prompt_encoder_mask_decoder_q4f16.onnx
+  ir_version 8 producer pytorch 2.9.0 opset_import [('ai.onnx', 18), ('com.microsoft', 1)]
+  inputs ['input_points', 'input_labels', 'input_boxes', 'image_embeddings.0', 'image_embeddings.1', 'image_embeddings.2']
+  outputs ['iou_scores', 'pred_masks', 'object_score_logits']
+  metadata_props []
+  MatMulNBits nodes 52  total nodes 701
+  first initializer names ['/Constant_9_output_0', '/mask_decoder/Constant_45_output_0', '/Constant_1_output_0']
+config.json transformers_version: "transformers_version": "5.0.0.dev0"
