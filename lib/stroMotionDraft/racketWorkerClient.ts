@@ -5,6 +5,7 @@
  */
 import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
 import type { RacketDetection } from '@/lib/stroMotionDraft/racketDetect';
+import { mobileSamEnabled } from '@/lib/stroMotionDraft/mobileSamSwitch';
 import type { SamCandidate, SamDecodeResult, SamPoint, SamPromptBox } from '@/lib/stroMotionDraft/samRacket';
 import type { AlphaMask } from '@/lib/stroMotionDraft/types';
 
@@ -90,7 +91,7 @@ export function createRacketWorker(): RacketWorkerHandle {
     });
   };
 
-  const ready = call({ type: 'init', phone: isPhoneBudgetActive() }).catch((e) => {
+  const ready = call({ type: 'init', phone: isPhoneBudgetActive(), mobileSam: mobileSamEnabled() }).catch((e) => {
     throw e instanceof RacketWorkerUnavailable ? e : new RacketWorkerUnavailable(`racket worker did not start: ${(e as Error).message}`);
   });
 

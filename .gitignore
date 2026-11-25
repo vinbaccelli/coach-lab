@@ -53,3 +53,6 @@ next-env.d.ts
 .next-*
 .dev-*.log
 bench-out/
+
+# MobileSAM converted models: NOT to be committed until counsel clears them (docs/MOBILESAM_PROVENANCE.md)
+/public/models/mobilesam/

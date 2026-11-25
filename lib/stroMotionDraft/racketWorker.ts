@@ -33,17 +33,23 @@ for (const level of ['log', 'warn'] as const) {
 
 type DetectMsg = { type: 'detect'; id: number; frame: ImageBitmap; keypoints: unknown; vw: number; vh: number; unitFloorNorm: number | null; label: string };
 type SegmentMsg = { type: 'segment'; id: number; frame: ImageBitmap; key: string; box: SamPromptBox };
-type InitMsg = { type: 'init'; id: number; phone: boolean };
+type InitMsg = { type: 'init'; id: number; phone: boolean; mobileSam?: boolean };
 // Mask-editor Object tool: encode once (embedding stays cached in THIS worker), then decode per click.
 type EncodeMsg = { type: 'encode'; id: number; frame: ImageBitmap; key: string };
 type DecodePointsMsg = { type: 'decodePoints'; id: number; key: string; points: unknown; force: number | null };
 type Msg = DetectMsg | SegmentMsg | InitMsg | EncodeMsg | DecodePointsMsg;
+
+let useMobileSam = false;
+/** SAM-2 (default) or MobileSAM (switch on): the same function names, so the handlers below do not care which. */
+const loadSam = (): Promise<typeof import('@/lib/stroMotionDraft/samRacket')> =>
+  (useMobileSam ? import('@/lib/stroMotionDraft/samMobile') : import('@/lib/stroMotionDraft/samRacket')) as Promise<typeof import('@/lib/stroMotionDraft/samRacket')>;
 
 ctx.onmessage = async (e: MessageEvent<Msg>) => {
   const m = e.data;
   try {
     if (m.type === 'init') {
       (globalThis as { __stroPhoneBudget?: boolean }).__stroPhoneBudget = m.phone; // read through the window shim by isPhoneBudgetActive()
+      useMobileSam = m.mobileSam === true; // OFF unless the page's switch is on (lib/stroMotionDraft/mobileSamSwitch.ts)
       ctx.postMessage({ id: m.id, ok: true });
       return;
     }
@@ -66,7 +72,7 @@ ctx.onmessage = async (e: MessageEvent<Msg>) => {
       return;
     }
     if (m.type === 'encode') {
-      const sam = await import('@/lib/stroMotionDraft/samRacket');
+      const sam = await loadSam();
       let enc = null;
       try {
         enc = await sam.encodeFrameForRacket(m.key, m.frame);
@@ -77,13 +83,13 @@ ctx.onmessage = async (e: MessageEvent<Msg>) => {
       return;
     }
     if (m.type === 'decodePoints') {
-      const sam = await import('@/lib/stroMotionDraft/samRacket');
+      const sam = await loadSam();
       const seg = await sam.decodeRacketMask(m.key, m.points as never, m.force ?? undefined);
       ctx.postMessage({ id: m.id, ok: true, seg }, seg ? [seg.mask.data.buffer] : []);
       return;
     }
     if (m.type === 'segment') {
-      const sam = await import('@/lib/stroMotionDraft/samRacket');
+      const sam = await loadSam();
       let reply: Record<string, unknown> = { id: m.id, ok: true, seg: null, reason: 'SAM unavailable on this machine' };
       let transfer: Transferable[] = [];
       try {
