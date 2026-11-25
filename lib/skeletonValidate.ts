@@ -35,7 +35,9 @@ const LIMB_REF_HALF = 15;        // samples each side for the rolling reference 
 const SWAP_RATIO = 0.6;          // swapped assignment must be this much cheaper
 const SWAP_MIN_SEP = 0.08;       // L/R must be ≥ this many body heights apart (else crossing, not a swap)
 const SWAP_MIN_MOVE = 0.04;      // …and the unswapped step must be a real move
-const OUTLIER_BH = 0.25;         // distance from neighbour midpoint, in body heights
+const OUTLIER_BH = 0.25;
+const OUTLIER_CONFIDENT_SCORE = 0.5; // a joint the model is this sure of is only dropped for a far bigger jump:
+const OUTLIER_CONFIDENT_MULT = 2;    // a fast racket-arm swing curves away from the neighbour midpoint and was being erased
 const BONE_LONG = 1.5;           // × local median length
 const BONE_BLAME_BH = 0.08;      // blamed endpoint must also be off its neighbours by this much
 const NEIGHBOUR_MAX_DT = 0.12;   // neighbours further apart than this (s) aren't a usable reference
@@ -211,7 +213,7 @@ export function validateTrack(samples: TrackSample[]): { samples: TrackSample[];
     for (const [n, k] of idx[i]) {
       if (k.score < MIN_SCORE) { if (k.score > INVALID_SCORE) mark(i, n, 'invalidLowScore'); continue; }
       const dev = deviation(i, n);
-      if (dev != null && dev > OUTLIER_BH) mark(i, n, 'invalidOutlier');
+      if (dev != null && dev > (k.score >= OUTLIER_CONFIDENT_SCORE ? OUTLIER_BH * OUTLIER_CONFIDENT_MULT : OUTLIER_BH)) mark(i, n, 'invalidOutlier');
     }
   }
 
