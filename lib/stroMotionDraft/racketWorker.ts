@@ -13,6 +13,7 @@
  * still uses the in-page SAM module.
  */
 import type { SamPromptBox } from '@/lib/stroMotionDraft/samRacket';
+import { installWasmMemoryCap } from '@/lib/stroMotionDraft/wasmMemoryCap';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -44,6 +45,7 @@ let useMobileSam = false;
 const backendOf = new Map<string, 'mobile' | 'sam2'>();
 /** MobileSAM failed to load or run in this worker: every later frame goes straight to SAM-2. */
 let mobileFailed = false;
+let mobileError = '';
 type SamModule = Pick<typeof import('@/lib/stroMotionDraft/samRacket'), 'encodeFrameForRacket' | 'decodeRacketMask' | 'decodeRacketMaskFromBox' | 'dropRacketEncoding' | 'getLastSamError'>;
 const loadSam2 = (): Promise<SamModule> => import('@/lib/stroMotionDraft/samRacket');
 const loadMobile = (): Promise<SamModule> => import('@/lib/stroMotionDraft/samMobile');
@@ -58,12 +60,14 @@ async function encodeWithFallback(key: string, frame: ImageBitmap): Promise<{ en
     const enc = await mob.encodeFrameForRacket(key, frame);
     if (enc) { backendOf.set(key, 'mobile'); return { enc, err: '', backend: 'mobile' }; }
     mobileFailed = true;
-    console.warn('[samMobile] unavailable — falling back to SAM-2:', mob.getLastSamError());
+    mobileError = mob.getLastSamError();
+    console.warn('[samMobile] unavailable — falling back to SAM-2:', mobileError);
   }
   const sam = await loadSam2();
   const enc = await sam.encodeFrameForRacket(key, frame);
   if (enc) backendOf.set(key, 'sam2');
-  return { enc, err: enc ? '' : sam.getLastSamError(), backend: 'sam2' };
+  // The notice shows BOTH failures: with only SAM-2's error a MobileSAM problem was invisible.
+  return { enc, err: enc ? '' : (mobileError ? `MobileSAM: ${mobileError} | SAM-2: ${sam.getLastSamError()}` : sam.getLastSamError()), backend: 'sam2' };
 }
 const samFor = (key: string): Promise<SamModule> => (backendOf.get(key) === 'mobile' ? loadMobile() : loadSam2());
 
@@ -72,6 +76,7 @@ ctx.onmessage = async (e: MessageEvent<Msg>) => {
   try {
     if (m.type === 'init') {
       (globalThis as { __stroPhoneBudget?: boolean }).__stroPhoneBudget = m.phone; // read through the window shim by isPhoneBudgetActive()
+      if (m.phone) installWasmMemoryCap(); // BEFORE any model module creates its ONNX runtime memory
       useMobileSam = m.mobileSam === true; // OFF unless the page's switch is on (lib/stroMotionDraft/mobileSamSwitch.ts)
       ctx.postMessage({ id: m.id, ok: true });
       return;
