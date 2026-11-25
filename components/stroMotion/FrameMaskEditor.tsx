@@ -605,7 +605,7 @@ export default function FrameMaskEditor({
   useEffect(() => {
     const was = prevBrushModeRef.current;
     prevBrushModeRef.current = brushMode;
-    if (was === 'racket' && brushMode !== 'racket' && releaseEditorSamWorker()) setRacketReady(false);
+    if (was === 'racket' && brushMode !== 'racket' && !keepSamAfterAdd() && releaseEditorSamWorker()) setRacketReady(false);
   }, [brushMode]);
   // PHONE: leaving the browser with the Object tool open keeps that ~850 MB resident, and iOS then kills the page in the
   // background ("The page restarted. Reason: killed by the phone while it was in the background"). Free it the moment the

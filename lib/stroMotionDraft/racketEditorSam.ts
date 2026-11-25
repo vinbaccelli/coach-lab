@@ -9,6 +9,7 @@
  */
 import { RacketWorkerUnavailable, createRacketWorker, getLastWorkerEncodeError, racketWorkerEnabled, type RacketWorkerHandle } from '@/lib/stroMotionDraft/racketWorkerClient';
 import { isPhoneBudgetActive } from '@/lib/stroMotionDraft/phoneBudget';
+import { samBackendIsMobile } from '@/lib/stroMotionDraft/mobileSamSwitch';
 import type { SamDecodeResult, SamPoint } from '@/lib/stroMotionDraft/samRacket';
 
 let worker: RacketWorkerHandle | null = null;
@@ -109,7 +110,8 @@ export function keepSamAfterAdd(): boolean {
     if (v === '1') return true;
     if (v === '0') return false;
   } catch { /* storage blocked: use the default */ }
-  return !isPhoneBudgetActive();
+  // The light model (MobileSAM, ~+350 MB) stays loaded; the heavy one (SAM-2, ~+850 MB) is still released on a phone.
+  return samBackendIsMobile() || !isPhoneBudgetActive();
 }
 export function stopKeepingSamAfterAdd(): void {
   try { window.localStorage.setItem(KEEP_SAM_AFTER_ADD_KEY, '0'); } catch { /* storage blocked */ }

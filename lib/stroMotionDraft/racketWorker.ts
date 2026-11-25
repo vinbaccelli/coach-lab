@@ -40,9 +40,32 @@ type DecodePointsMsg = { type: 'decodePoints'; id: number; key: string; points: 
 type Msg = DetectMsg | SegmentMsg | InitMsg | EncodeMsg | DecodePointsMsg;
 
 let useMobileSam = false;
-/** SAM-2 (default) or MobileSAM (switch on): the same function names, so the handlers below do not care which. */
-const loadSam = (): Promise<typeof import('@/lib/stroMotionDraft/samRacket')> =>
-  (useMobileSam ? import('@/lib/stroMotionDraft/samMobile') : import('@/lib/stroMotionDraft/samRacket')) as Promise<typeof import('@/lib/stroMotionDraft/samRacket')>;
+/** Which backend encoded each frame ('mobile' = MobileSAM, 'sam2' = SAM-2). Decodes must use the module that encoded. */
+const backendOf = new Map<string, 'mobile' | 'sam2'>();
+/** MobileSAM failed to load or run in this worker: every later frame goes straight to SAM-2. */
+let mobileFailed = false;
+type SamModule = Pick<typeof import('@/lib/stroMotionDraft/samRacket'), 'encodeFrameForRacket' | 'decodeRacketMask' | 'decodeRacketMaskFromBox' | 'dropRacketEncoding' | 'getLastSamError'>;
+const loadSam2 = (): Promise<SamModule> => import('@/lib/stroMotionDraft/samRacket');
+const loadMobile = (): Promise<SamModule> => import('@/lib/stroMotionDraft/samMobile');
+
+/**
+ * Encode a frame with MobileSAM, falling back to SAM-2 if MobileSAM cannot load or run (missing file, offline, an unsupported device).
+ * The caller learns which backend holds the embedding (the editor keeps the light model resident, never the heavy one).
+ */
+async function encodeWithFallback(key: string, frame: ImageBitmap): Promise<{ enc: { ms: number; bytes: number } | null; err: string; backend: 'mobile' | 'sam2' }> {
+  if (useMobileSam && !mobileFailed) {
+    const mob = await loadMobile();
+    const enc = await mob.encodeFrameForRacket(key, frame);
+    if (enc) { backendOf.set(key, 'mobile'); return { enc, err: '', backend: 'mobile' }; }
+    mobileFailed = true;
+    console.warn('[samMobile] unavailable — falling back to SAM-2:', mob.getLastSamError());
+  }
+  const sam = await loadSam2();
+  const enc = await sam.encodeFrameForRacket(key, frame);
+  if (enc) backendOf.set(key, 'sam2');
+  return { enc, err: enc ? '' : sam.getLastSamError(), backend: 'sam2' };
+}
+const samFor = (key: string): Promise<SamModule> => (backendOf.get(key) === 'mobile' ? loadMobile() : loadSam2());
 
 ctx.onmessage = async (e: MessageEvent<Msg>) => {
   const m = e.data;
@@ -72,29 +95,29 @@ ctx.onmessage = async (e: MessageEvent<Msg>) => {
       return;
     }
     if (m.type === 'encode') {
-      const sam = await loadSam();
-      let enc = null;
+      let r: Awaited<ReturnType<typeof encodeWithFallback>> = { enc: null, err: 'encode failed', backend: 'sam2' };
       try {
-        enc = await sam.encodeFrameForRacket(m.key, m.frame);
+        r = await encodeWithFallback(m.key, m.frame);
       } finally {
         try { m.frame.close(); } catch { /* already closed */ }
       }
-      ctx.postMessage({ id: m.id, ok: true, enc, err: enc ? '' : sam.getLastSamError() });
+      ctx.postMessage({ id: m.id, ok: true, enc: r.enc, err: r.err, backend: r.backend });
       return;
     }
     if (m.type === 'decodePoints') {
-      const sam = await loadSam();
+      const sam = await samFor(m.key);
       const seg = await sam.decodeRacketMask(m.key, m.points as never, m.force ?? undefined);
       ctx.postMessage({ id: m.id, ok: true, seg }, seg ? [seg.mask.data.buffer] : []);
       return;
     }
     if (m.type === 'segment') {
-      const sam = await loadSam();
       let reply: Record<string, unknown> = { id: m.id, ok: true, seg: null, reason: 'SAM unavailable on this machine' };
       let transfer: Transferable[] = [];
+      let sam: SamModule | null = null;
       try {
-        const enc = await sam.encodeFrameForRacket(m.key, m.frame);
-        if (enc) {
+        const r = await encodeWithFallback(m.key, m.frame);
+        if (r.enc) {
+          sam = await samFor(m.key);
           const seg = await sam.decodeRacketMaskFromBox(m.key, m.box);
           if (seg) {
             reply = { id: m.id, ok: true, seg: { mask: seg.mask, chosen: seg.chosen, candidates: seg.candidates } };
@@ -105,7 +128,7 @@ ctx.onmessage = async (e: MessageEvent<Msg>) => {
         }
       } finally {
         try { m.frame.close(); } catch { /* already closed */ }
-        try { sam.dropRacketEncoding(m.key); } catch { /* best-effort */ }
+        try { sam?.dropRacketEncoding(m.key); backendOf.delete(m.key); } catch { /* best-effort */ }
       }
       ctx.postMessage(reply, transfer);
       return;

@@ -1,13 +1,13 @@
 /**
- * MobileSAM backend for the mask editor's Object tool and the racket box prompt. OFF BY DEFAULT.
+ * MobileSAM backend for the mask editor's Object tool and the racket box prompt. The DEFAULT in the racket worker (phones);
+ * racketWorker.ts falls back to SAM-2 if this module cannot load or run.
  *
- * Same exported functions as samRacket.ts (encodeFrameForRacket, decodeRacketMask, decodeRacketMaskFromBox, ...), so the worker can
- * pick either module and nothing else changes. Why: SAM-2 holds ~850 MB on a phone and the page is killed by memory; MobileSAM's
- * image encoder is a 28 MB TinyViT (desktop: ~390 MB peak with a limited arena, IoU 0.95 against the PyTorch original).
+ * Same exported functions as samRacket.ts (encodeFrameForRacket, decodeRacketMask, decodeRacketMaskFromBox, ...). Why: SAM-2 holds
+ * ~850 MB on a phone and the page is killed by memory; MobileSAM's image encoder is a 28 MB TinyViT (desktop: ~390 MB peak with a
+ * limited arena, IoU 0.95 against the PyTorch original).
  *
- * MODEL FILES ARE NOT IN THIS REPOSITORY. They are converted by us from the official Apache-2.0 weights (see
- * docs/MOBILESAM_PROVENANCE.md) and are not served until counsel clears them: /models/mobilesam/encoder.onnx and decoder.onnx.
- * Without the files, or without the switch, this module is never loaded and nothing changes.
+ * Model files: /models/mobilesam/encoder-v1.onnx and decoder-v1.onnx (public assets, same-origin, 1-year immutable cache; a new
+ * version gets a new file name). Converted by us from the official Apache-2.0 checkpoint: docs/MOBILESAM_PROVENANCE.md.
  *
  * Uses onnxruntime-web (already installed as a dependency of transformers.js) on the wasm EP with the phone memory options.
  */
@@ -16,8 +16,8 @@ import { mobileSamTarget, rgbaToMobileSamInput, scalePoint } from '@/lib/stroMot
 import { isPhoneBudgetActive, PHONE_ORT_SESSION_OPTIONS } from '@/lib/stroMotionDraft/phoneBudget';
 import type { SamCandidate, SamDecodeResult, SamPoint, SamPromptBox } from '@/lib/stroMotionDraft/samRacket';
 
-export const MOBILE_SAM_ENCODER_URL = '/models/mobilesam/encoder.onnx';
-export const MOBILE_SAM_DECODER_URL = '/models/mobilesam/decoder.onnx';
+export const MOBILE_SAM_ENCODER_URL = '/models/mobilesam/encoder-v1.onnx';
+export const MOBILE_SAM_DECODER_URL = '/models/mobilesam/decoder-v1.onnx';
 
 const MAX_PLAUSIBLE_AREA_PCT = 12;
 const MIN_PLAUSIBLE_AREA_PCT = 0.002;

@@ -1,6 +1,6 @@
 # MobileSAM — technical provenance of the converted models
 
-Status: **Pending legal review.** Nothing here is deployed. The converted models are NOT in the repository (`/public/models/mobilesam/` is git-ignored), are not uploaded anywhere, and the code that can load them is OFF by default (`lib/stroMotionDraft/mobileSamSwitch.ts`). This document records facts; it does not claim commercial clearance.
+Status: **Shipped by the owner's decision; licensing NOT cleared by counsel.** The converted models are served as public assets from `/public/models/mobilesam/` (`encoder-v1.onnx`, `decoder-v1.onnx`) and MobileSAM is the default Object-select model in the racket worker (phones), with SAM-2 as the automatic fallback. Kill switch: `localStorage['anglemotion:mobileSam']='0'`. This document records facts; it does not claim commercial clearance.
 
 ## Verified facts
 | Item | Value |
@@ -21,5 +21,5 @@ Status: **Pending legal review.** Nothing here is deployed. The converted models
 3. **Hosting the converted files** from our origin as a downloadable model: whether that is "redistribution" that requires the licence text and notices to accompany it.
 4. **Hugging Face / checkpoint hosting claims** (e.g. a differing licence label on a Hugging Face page) were not examined.
 
-## What exists in code (switch OFF)
-`lib/stroMotionDraft/samMobile.ts` (same exported functions as `samRacket.ts`), `samMobilePre.ts` (pure preprocessing, unit-tested), `mobileSamSwitch.ts`. The racket worker uses SAM-2 unless the page's switch is on (`localStorage['anglemotion:mobileSam']='1'`). Model URLs: `/models/mobilesam/encoder.onnx` and `decoder.onnx`; absent files make the load fail with a visible error, never a silent download.
+## What exists in code
+`samMobile.ts` (same exported functions as `samRacket.ts`), `samMobilePre.ts` (pure preprocessing, unit-tested), `mobileSamSwitch.ts` (default on; `'0'` disables), `racketWorker.ts` (tries MobileSAM, falls back to SAM-2 for the rest of the session if it cannot load or run). Model URLs: `/models/mobilesam/encoder-v1.onnx`, `decoder-v1.onnx` (same origin, `Cache-Control: public, max-age=31536000, immutable`). Desktop keeps the in-page SAM-2 path (the worker is a phone path unless `localStorage.racketWorker='1'`).

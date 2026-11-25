@@ -1,6 +1,8 @@
 /**
- * The MobileSAM switch. DEFAULT OFF (the model files are not shipped until counsel clears them; docs/MOBILESAM_PROVENANCE.md).
- * On: localStorage 'anglemotion:mobileSam' = '1', or window.__mobileSam = true. Read by the page; the worker is told at init.
+ * MobileSAM (the light Object-select model) is the DEFAULT for the racket worker, which is what phones use. SAM-2 stays as the fallback:
+ * the worker tries MobileSAM first and switches to SAM-2 for the rest of the session if MobileSAM cannot load or run.
+ *
+ * Kill switch: localStorage 'anglemotion:mobileSam' = '0' (or window.__mobileSam = false) forces SAM-2 only; '1' forces MobileSAM on.
  */
 export const MOBILE_SAM_KEY = 'anglemotion:mobileSam';
 
@@ -8,5 +10,17 @@ export function mobileSamEnabled(): boolean {
   if (typeof window === 'undefined') return false;
   const w = window as unknown as Record<string, unknown>;
   if (typeof w.__mobileSam === 'boolean') return w.__mobileSam;
-  try { return window.localStorage.getItem(MOBILE_SAM_KEY) === '1'; } catch { return false; }
+  try {
+    const v = window.localStorage.getItem(MOBILE_SAM_KEY);
+    if (v === '0') return false;
+    if (v === '1') return true;
+  } catch { /* storage blocked: use the default */ }
+  return true;
 }
+
+export type SamBackend = 'mobile' | 'sam2';
+let lastBackend: SamBackend | null = null;
+/** The worker reports which model actually encoded the last frame (MobileSAM, or SAM-2 after a fallback). */
+export function noteSamBackend(b: SamBackend | undefined): void { if (b === 'mobile' || b === 'sam2') lastBackend = b; }
+/** True when the Object tool is (or is about to be) running the light model. */
+export function samBackendIsMobile(): boolean { return lastBackend ? lastBackend === 'mobile' : mobileSamEnabled(); }
