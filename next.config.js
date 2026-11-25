@@ -61,6 +61,11 @@ const nextConfig = {
         ],
       },
       {
+        // Model weights never change under the same name (new versions get a new file name): let the browser keep them.
+        source: '/models/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
+      {
         source: '/(.*)',
         headers: [
           { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
