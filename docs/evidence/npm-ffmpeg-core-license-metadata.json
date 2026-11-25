@@ -1,0 +1,222 @@
+{
+ "name": "@ffmpeg/core",
+ "versions": {
+  "0.1.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/jeromewu/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.2.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/jeromewu/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.3.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegjs/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.3.1": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegjs/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.4.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegjs/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.5.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegjs/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.6.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegjs/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.7.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegjs/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.7.1": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegjs/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.8.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.8.1": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.8.2": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.9.0-alpha.1": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.8.3": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.8.4": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.9.0-alpha.2": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.8.5": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.9.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.10.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.11.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/FFmpeg.git",
+    "type": "git"
+   }
+  },
+  "0.12.0-alpha.2": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  },
+  "0.12.0": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  },
+  "0.12.1": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  },
+  "0.12.2": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  },
+  "0.12.3": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  },
+  "0.12.4": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  },
+  "0.12.5": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  },
+  "0.12.6": {
+   "license": "MIT",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  },
+  "0.12.8": {
+   "license": "GPL-2.0-or-later",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  },
+  "0.12.9": {
+   "license": "GPL-2.0-or-later",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  },
+  "0.12.10": {
+   "license": "GPL-2.0-or-later",
+   "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+   }
+  }
+ }
+}

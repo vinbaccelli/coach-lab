@@ -1,0 +1,20 @@
+# Extracted with: strings -n 8 dist/esm/ffmpeg-core.wasm | grep -E 'configuration:|GNU General Public|x264 - core'
+# Source: https://registry.npmjs.org/@ffmpeg/core/-/core-0.12.10.tgz (read 2026-11-24)
+# tarball sha1 3177e88852bfbfaad5d258e9e0ac1fd9dffd3223
+67a48f11645f85439f3fde4f2119042c16b374b910206b7a7a24f342e28dcae3  dist/esm/ffmpeg-core.js
+9f57947a5bd530d8f00c5b3f2cb2a3492faa7e5d823315342d6a8656d0a6b7b7  dist/esm/ffmpeg-core.wasm
+b266ab5b952555881dd6310663986994a182acb2b7ff25cf10a25f7a37ac2b21  dist/umd/ffmpeg-core.js
+9f57947a5bd530d8f00c5b3f2cb2a3492faa7e5d823315342d6a8656d0a6b7b7  dist/umd/ffmpeg-core.wasm
+
+%sconfiguration: --target-os=none --arch=x86_32 --enable-cross-compile --disable-asm --disable-stripping --disable-programs --disable-doc --disable-debug --disable-runtime-cpudetect --disable-autodetect --nm=emnm --ar=emar --ranlib=emranlib --cc=emcc --cxx=em++ --objcc=emcc --dep-cc=emcc --extra-cflags='-I/opt/include -O3 -msimd128' --extra-cxxflags='-I/opt/include -O3 -msimd128' --disable-pthreads --disable-w32threads --disable-os2threads --enable-gpl --enable-libx264 --enable-libx265 --enable-libvpx --enable-libmp3lame --enable-libtheora --enable-libvorbis --enable-libopus --enable-zlib --enable-libwebp --enable-libfreetype --enable-libfribidi --enable-libass --enable-libzimg
+%sconfiguration:
+%s is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+You should have received a copy of the GNU General Public License
+along with %s; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+x264 - core %d%s - H.264/MPEG-4 AVC codec - Copy%s 2003-2022 - http://www.videolan.org/x264.html - options: %s
+libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 RGB
+libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10

@@ -1,0 +1,37 @@
+# npm-package byte comparison (read 2026-11-24). Tarballs from registry.npmjs.org; sha256 of each file in the tarball vs the committed file.
+
+## @mediapipe/selfie_segmentation@0.1.1675465747 (package.json license: Apache-2.0; tarball has no LICENSE file) vs public/mediapipe-selfie/
+9dad28188ae54ea420e3d29c23360b040a0dfb88954b99a3e456b8a8c93cf2a1  README.md
+46152cccb63a9249503f7b8f49dbc3cfbd2a2994eda2c9f0db32a2998e1879a9  index.d.ts
+b514e7146be2fbceee0a4a6e8a3895d2df36e552338aad8045a38a12c1c8eff8  package.json
+0007be42c754f111063c0121bba7104880b7c56277d3a9681cdcb17709236aee  selfie_segmentation.binarypb
+a4720d2d2374ec9df3510461ff186a4af427fb5bd402375e135875a991467da3  selfie_segmentation.js
+8d13b7fae74af625c641226813616a2117bd6bca19eb3b75574621fc08557f27  selfie_segmentation.tflite
+4aafe6223bb8dac6fac8ca8ed56852870a33051ef3f6238822d282a109962894  selfie_segmentation_landscape.tflite
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  selfie_segmentation_solution_simd_wasm_bin.data
+9406e7e30843bdca189689d4bea413f3e468f71e381560e583ef12792d26d46a  selfie_segmentation_solution_simd_wasm_bin.js
+d93e73677ef1fe791ff5407083c0f9ced6d6050a705bd6c20823fc05919d8dc4  selfie_segmentation_solution_simd_wasm_bin.wasm
+ed59858c14c9db26d34abbf0afa9017e5c6583a6ad63dae63d2fe42e19abfea5  selfie_segmentation_solution_wasm_bin.js
+37665276fd8e38589a28b07ddec805266efb1b7a1a52fd36667ef11dff43a847  selfie_segmentation_solution_wasm_bin.wasm
+-> every one of the 9 shipped files is byte-identical to the package file of the same name (README.md, index.d.ts, package.json are not shipped)
+
+## @mediapipe/tasks-vision@0.10.35 (package.json license: Apache-2.0; tarball has no LICENSE file) wasm/ vs public/mediapipe-wasm/
+e7fd9858e8e8f221d9b96eddc11f8e077f263e0b7bbd79d3cbe882b134274f8c  vision_wasm_internal.js
+6a5c64584c2ab61c763b6e204afbdbc7ce1caf7f5216187322bca8df94f646bc  vision_wasm_internal.wasm
+1f1d6215324a1fe62f6742d49a3db911170987ca18ad8c1b75f1a1c82acf2b44  vision_wasm_module_internal.js
+617b8e0248dbd27e9d7ece4218004eae4cefb499196d1bb4fa0e3fef21708756  vision_wasm_module_internal.wasm
+438d1fe8ff7f4d946025bc211c291543c037d8a3785ed4eee60f1f521b236296  vision_wasm_nosimd_internal.js
+8a3092d34c79d3f57e6ba8592105e8a90f6b07c27891ffecd14cca428bfd3e31  vision_wasm_nosimd_internal.wasm
+-> all 6 identical
+
+## @tesseract.js-data/eng@1.0.0 (package.json license: MIT) vs public/tesseract/eng.traineddata.gz
+ed350f3752f81ee8f38769edc14d92d997dababe23b565c59879372cc46a2468  4.0.0/eng.traineddata.gz
+45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91  4.0.0_best_int/eng.traineddata.gz
+shipped: 45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91  /home/user/coach-lab/public/tesseract/eng.traineddata.gz
+-> shipped file = 4.0.0_best_int/eng.traineddata.gz of that package
+
+## @tensorflow-models/pose-detection@2.1.3 default MoveNet URLs (dist/*.js)
+https://tfhub.dev/google/tfjs-model/movenet/multipose/lightning/1
+https://tfhub.dev/google/tfjs-model/movenet/singlepose/lightning/4
+https://tfhub.dev/google/tfjs-model/movenet/singlepose/thunder/4
+(tfhub.dev unreachable from the review environment; the bytes behind these URLs could not be compared with public/models/movenet-*)

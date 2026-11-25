@@ -1,0 +1,28 @@
+{
+  "name": "@ffmpeg/core",
+  "version": "0.12.6",
+  "license": "MIT",
+  "author": {
+    "name": "Jerome Wu",
+    "email": "jeromewus@gmail.com"
+  },
+  "repository": {
+    "url": "git+https://github.com/ffmpegwasm/ffmpeg.wasm.git",
+    "type": "git"
+  },
+  "gitHead": "e0d4c62a229ba58ea0c6e6b881e289f2fefe97c4",
+  "dist": {
+    "shasum": "9a61866fdd662118bcf419b96db76d5fa3c6c270",
+    "tarball": "https://registry.npmjs.org/@ffmpeg/core/-/core-0.12.6.tgz",
+    "fileCount": 5,
+    "integrity": "sha512-PrjWBTfGn2WVn9T7wGnzfFwChbqWeZc7tM9vvJZVRadYFUDakfzy7W0LpYC0cvvK0xT82qlBsk38lQhJ/Hps5A==",
+    "signatures": [
+      {
+        "sig": "MEYCIQDsuevKNwgQ6THflBhueUdV9qdqdV1ebU9eDMaMda7KSQIhAPlGb6N3qyDJxDl+jCjulXY6uoIZ4bhmMpROG76M/X3L",
+        "keyid": "SHA256:jl3bwswu80PjjokCgh0o2w5c2U4LhQAE57gj9cz1kzA"
+      }
+    ],
+    "unpackedSize": 64488325
+  },
+  "description": "FFmpeg WebAssembly version (single thread)"
+}

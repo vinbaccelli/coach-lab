@@ -1,0 +1,199 @@
+  MODEL DETAILS                                                 MODEL SPECIFICATIONS
+                                                                Model Type
+  A model (6MB size) to segment objects / animals /
+                                                                Convolutional Neural Network
+  humans on the photos based on point, located within the
+  segmentation mask of the object. Runs in real-time (~30       Model Architecture
+  FPS) on a Pixel 7 via TFLite GPU backend.                     ​Convolutional Neural Network: MobileNetV3-like with
+                                                                 customized decoder blocks for real-time
+  Returns a segmentation mask for objects of interest.           performance.
+
+                                                                Input(s)
+                                                                A frame of video or an image, represented as a 512 x
+                                                                512 x 4 tensor. Channels order: red, green, blue, prior
+                                                                map with values in [0.0, 1.0]. Prior map is encoded as
+                                                                one-hot encoded pixels where the point-of-interest is
+                                                                located
+
+                                                                Output(s)
+                                                                512 x 512 x 2 tensor with masks for background (channel
+                                                                0) and person (channel 1) where values are in range
+  Left: Input frame, prior map. Right: Output object mask.
+                                                                [MIN_FLOAT, MAX_FLOAT] and user has to apply softmax
+                                                                across both channels to yield foreground probability in
+                                                                [0.0, 1.0].
+
+
+
+
+  AUTHORS
+  Who created this model?
+  Valentin Bazarevsky, Google
+  Ben Hahn, Google                                              LICENSED UNDER
+                                                                Apache License, Version 2.0
+  DATE
+  Mar 13, 2023
+
+
+
+
+Based on Model Cards for Model Reporting, In Proceedings of FAT* Conference (FAT*2019). ACM, New York, NY, USA
+Intended Uses
+
+ APPLICATION                                    DOMAIN AND USERS                               OUT-OF-SCOPE APPLICATIONS
+
+ Object segmentation from photos in             ● Photo editing                                ● Small objects / people too far
+ interactive applications.                      ● Object annotation                              away from the camera (e.g.
+                                                                                                 further than 14 feet / 4 meters).
+                                                                                               ● Human segmentation that is not
+                                                                                                 consented to by the human
+                                                                                                 being segmented is out of
+                                                                                                 scope and not enabled by this
+                                                                                                 technology.
+                                                                                               ● Any form of surveillance or
+                                                                                                 identity recognition is explicitly
+                                                                                                 out of scope and not enabled
+                                                                                                 by this technology.
+
+Limitations
+
+ PRESENCE OF ATTRIBUTES                         TRADE-OFFS                                     ENVIRONMENT
+
+ This model may segment multiple                The model is optimized for                     When degrading the
+ objects present in the scene                   real-time performance in the web               environment light, adding noise,
+ particularly if they are located very          browser and on a wide variety of               or fast motions, or including large
+ closely and may represent once                 mobile devices, and may not                    occluders, one can expect
+ common essence.                                provide pixel perfect masks.                   degradation of quality of the
+ Some thin features of objects,                                                                predicted mask.
+ animals or humans such as fingers
+ might occasionally be missed in the
+ mask.
+
+
+
+Ethical Considerations
+
+
+ HUMAN LIFE                                     PRIVACY
+
+ The model is not intended for human            This model was trained and
+ life-critical decisions. The primary           evaluated on images, including
+ intended application is                        consented images of people using a
+ entertainment.                                 mobile AR application captured with
+                                                smartphone cameras in various
+                                                “in-the-wild” conditions.
+
+
+
+
+_
+Based on Model Cards for Model Reporting, In Proceedings of FAT* Conference (FAT*2019). ACM, New York, NY, USA                    2 of 6
+Training Factors and Subgroups
+
+
+ INSTRUMENTATION                                                        ENVIRONMENTS
+
+ ● The majority dataset images were captured on a                       The model is trained on images with various lighting,
+   diverse set of front and back-facing smartphone                      noise and motion conditions and with diverse
+   cameras.                                                             augmentations. However, its quality can degrade in
+ ● These images were captured in a real-world                           extreme conditions.
+   environment with different light, noise and motion
+   conditions via an AR (Augmented Reality)
+   application.
+
+
+
+
+_
+Based on Model Cards for Model Reporting, In Proceedings of FAT* Conference (FAT*2019). ACM, New York, NY, USA                  3 of 6
+Evaluation metrics
+Model Performance Measures
+
+
+
+IoU, Intersection over Union
+
+We evaluate the performance of our model by computing the ratio of the intersection of the predicted mask with
+the ground truth mask, and their union for the person class. Typical errors occur along the boundary of the true
+segmentation mask and may move it by a few pixels or lose thin features.
+
+
+Evaluation results
+Skin Tone and Gender Evaluation Results
+
+
+DATASET                                                               FAIRNESS METRICS & BASELINE
+Contains 1870 images, captured in a real-world                        We asked 7 annotators to re-annotate the validation
+environment with different light, noise and motion                    dataset, yielding a person IoU of 98.74%
+conditions via an AR (Augmented Reality) application,                 This is a high inter-annotator agreement,
+which were annotated with perceived gender (male                      suggesting that the IoU metric is a strong indicator
+                                                                      of the person's segmentation mask.
+and female) and skin tone (from 1 to 10) based on the
+monk scale.
+
+                                                                      FAIRNESS RESULTS
+                                                                      Examine whether subgroups are within three
+FAIRNESS CRITERIA
+                                                                      standard deviation away from the metrics of the
+We consider a model to be performing poorly for a                     entire dataset:
+particular group if any region is further away than 3
+stdev from the average of the model’s performance                     Evaluations of validation datasets result in
+across regions                                                        average performance of 87.7% with a range of
+                                                                      [85.3%, 89.4%] across all skin tones. The
+                                                                      maximum discrepancy between worst and best
+EVALUATION RESULTS                                                    performing categories is 4.1%.
+Detailed evaluation across genders and skin tones is
+presented in the tables below.                                        Evaluations across gender yield an average
+                                                                      performance of 87.7% with a range of [87.3%,
+                                                                      88.0%]. The maximum discrepancy is 0.7%.
+
+                                                                      Observed discrepancy across different genders
+                                                                      and skin tones is less than one defined in our
+                                                                      fairness criteria. We therefore consider the
+                                                                      model performing well across groups.
+
+
+
+
+_
+Based on Model Cards for Model Reporting, In Proceedings of FAT* Conference (FAT*2019). ACM, New York, NY, USA               4 of 6
+                        Skintone              Test subset items and %                     IOU              STDEV
+                 Tone 1, 2                                798            42.67%                  86.4             16.0
+                 Tone 3                                   394            21.07%                  88.1             14.0
+                 Tone 4                                   129               6.9%                 89.2             12.9
+                 Tone 5                                    80             4.28%                  89.4             11.2
+                 Tone 6                                   164             8.77%                  87.8             17.1
+                 Tone 7                                   227            12.14%                  87.8             13.9
+                 Tones 8, 9, 10                            78            4.17 %                  85.3             15.3
+                 Average                                                                         87.7             14.3
+                 Range                                                                            4.1              5.9
+                                                     Skin tone evaluation, IOU
+
+
+                       Gender              Test subset items and %                      IOU               STDEV
+                   Male                                 751                41%                  87.3             14.7
+                   Female                              1081                59%                  88.0             14.3
+                   Average                                                                      87.7             14.5
+                   Range                                                                         0.7              0.4
+                                                      Gender evaluation, IOU
+
+
+
+
+_
+Based on Model Cards for Model Reporting, In Proceedings of FAT* Conference (FAT*2019). ACM, New York, NY, USA           5 of 6
+Definitions
+ AUGMENTED REALITY (AR)                         INTERSECTION OVER UNION
+ Augmented reality, a technology                A measure of similarity. In the
+ that superimposes                              segmentation case, the ratio
+ a computer-generated image on                  between the area of intersection
+ a user's view of the real world,               of two masks and the area
+ thus providing a composite view.
+                                                covered by their union.
+
+
+
+
+_
+Based on Model Cards for Model Reporting, In Proceedings of FAT* Conference (FAT*2019). ACM, New York, NY, USA   6 of 6
+
