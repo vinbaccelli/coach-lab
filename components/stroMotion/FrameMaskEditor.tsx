@@ -424,9 +424,8 @@ export default function FrameMaskEditor({
     const x = (client.x - rect.left) * k;
     const y = (client.y - rect.top) * k;
     const s = Math.max(3, 18 * k);
-    const gap = s * 0.32;
     // The ring is the BRUSH itself: its radius is the brush radius in screen px (what applyBrushToMask uses), so the coach sees exactly the
-    // area that will be added or removed. The crosshair marks its centre.
+    // area that will be added or removed. Ring only, no centre cross (the cross belongs to the Object click reticle).
     const brushR = Math.max(2, brushSizeRef.current * k);
     ctx.save();
     ctx.lineCap = 'round';
@@ -436,12 +435,6 @@ export default function FrameMaskEditor({
     ]) {
       ctx.strokeStyle = pass.c;
       ctx.lineWidth = pass.w;
-      ctx.beginPath();
-      ctx.moveTo(x - s, y); ctx.lineTo(x - gap, y);
-      ctx.moveTo(x + gap, y); ctx.lineTo(x + s, y);
-      ctx.moveTo(x, y - s); ctx.lineTo(x, y - gap);
-      ctx.moveTo(x, y + gap); ctx.lineTo(x, y + s);
-      ctx.stroke();
       ctx.beginPath();
       ctx.arc(x, y, brushR, 0, Math.PI * 2);
       ctx.stroke();
