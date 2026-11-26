@@ -2,7 +2,6 @@
 
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { webmFixDuration } from 'webm-fix-duration';
-import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 import { stopAllTracks } from '@/lib/tabCaptureRecording';
 
 interface ScreenRecorderProps {
@@ -147,36 +146,10 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
         console.warn('[ScreenRecorder] webmFixDuration skipped:', fixErr);
       }
 
-      let outBlob: Blob = finalBlob;
-      let outExt = 'mp4';
-      const blobLooksMp4 =
-        outBlob.type.includes('mp4') || /mp4/i.test(mimeTypeRef.current);
-
-      if (!blobLooksMp4) {
-        try {
-          setProgress('Converting to MP4…');
-          const conv = await convertWebmToMp4ForScreenRecord(finalBlob);
-          if (conv.ok) {
-            setProgress(null);
-            outBlob = conv.blob;
-            outExt = 'mp4';
-          } else {
-            setProgress(null);
-            setError('Could not convert recording to MP4. Try again.');
-            setRecState('idle');
-            onRecordingChange?.(false);
-            saveFinishedRef.current = true;
-            return;
-          }
-        } catch {
-          setProgress(null);
-          setError('Could not convert recording to MP4. Try again.');
-          setRecState('idle');
-          onRecordingChange?.(false);
-          saveFinishedRef.current = true;
-          return;
-        }
-      }
+      // No conversion: MP4 where the browser recorded MP4, otherwise the WebM as recorded.
+      const outBlob: Blob = finalBlob;
+      const blobLooksMp4 = outBlob.type.includes('mp4') || /mp4/i.test(mimeTypeRef.current);
+      const outExt = blobLooksMp4 ? 'mp4' : 'webm';
 
       if (promptDownload && onRecordingComplete) {
         onRecordingComplete(outBlob, outExt);
@@ -544,7 +517,7 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== 'inactive') {
       // If available, ask the user where to save *before* async work begins.
-      // This avoids browsers blocking a download after FFmpeg finishes.
+      // This avoids browsers blocking a download after async work finishes.
       try {
         const supportsPicker = typeof (window as any).showSaveFilePicker === 'function';
         if (supportsPicker) {
@@ -565,7 +538,7 @@ const ScreenRecorder = forwardRef<ScreenRecorderHandle, ScreenRecorderProps>(fun
       recorder.stop();
       setRecState('stopped');
 
-      // Failsafe only if onstop never completes (crash). Do not race FFmpeg async work.
+      // Failsafe only if onstop never completes (crash). Do not race the async finish.
       if (stopFailsafeRef.current) clearTimeout(stopFailsafeRef.current);
       // Use the global setTimeout return type so it works in Vercel (node typings)
       // and in the browser (number).

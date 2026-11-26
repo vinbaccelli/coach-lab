@@ -27,7 +27,6 @@ import React, {
   useState,
 } from 'react';
 import { webmFixDuration } from 'webm-fix-duration';
-import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 import { drawVideoWatermark } from '@/lib/videoWatermark';
 import { stopAllTracks } from '@/lib/tabCaptureRecording';
 import type { WebcamPipPresentation } from '@/lib/webcamPipPresentation';
@@ -70,9 +69,7 @@ export const RECORDING_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 /**
  * Explicit audio bitrate. Only videoBitsPerSecond used to be set, which leaves the
  * audio allocation entirely to the UA — a number that is neither documented nor
- * stable across Chrome versions. 128 kbps matches the AAC bitrate the MP4
- * conversion already targets (lib/ffmpegWebmToMp4.ts), so the capture is no longer
- * the weakest link in the chain.
+ * stable across Chrome versions. 128 kbps is a normal AAC/Opus voice-and-music rate.
  */
 export const RECORDING_AUDIO_BPS = 128_000;
 
@@ -451,25 +448,10 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
       console.warn('[RecordingProvider] webmFixDuration skipped:', fixErr);
     }
 
-    let outBlob: Blob = fixedBlob;
-    let outExt = 'mp4';
+    // No conversion: MP4 where the browser recorded MP4, otherwise the WebM as recorded.
+    const outBlob: Blob = fixedBlob;
     const looksMp4 = outBlob.type.includes('mp4') || /mp4/i.test(mimeTypeRef.current);
-    if (!looksMp4) {
-      try {
-        setProgress('Converting to MP4…');
-        const conv = await convertWebmToMp4ForScreenRecord(fixedBlob);
-        setProgress(null);
-        if (conv.ok) {
-          outBlob = conv.blob;
-        } else {
-          // Deliver the WebM rather than losing the capture.
-          outExt = 'webm';
-        }
-      } catch {
-        setProgress(null);
-        outExt = 'webm';
-      }
-    }
+    const outExt = looksMp4 ? 'mp4' : 'webm';
 
     // Hand off to the analysis page (crop/save modal). If the coach stopped
     // while on another page, this waits in state until /analysis remounts.

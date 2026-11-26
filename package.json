@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "postinstall": "node scripts/copy-ort-wasm.mjs && node scripts/copy-ffmpeg-worker.mjs",
-    "predev": "node scripts/copy-ort-wasm.mjs && node scripts/copy-ffmpeg-worker.mjs",
+    "postinstall": "node scripts/copy-ort-wasm.mjs",
+    "predev": "node scripts/copy-ort-wasm.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/copy-ort-wasm.mjs && node scripts/copy-ffmpeg-worker.mjs",
+    "prebuild": "node scripts/copy-ort-wasm.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -15,8 +15,6 @@
     "test:e2e": "node scripts/local-stack/e2e/run-all.mjs"
   },
   "dependencies": {
-    "@ffmpeg/ffmpeg": "^0.12.15",
-    "@ffmpeg/util": "^0.12.2",
     "@huggingface/transformers": "^4.2.0",
     "@mediapipe/pose": "^0.5.1675469404",
     "@mediapipe/tasks-vision": "^0.10.35",
