@@ -12,37 +12,72 @@ function closeBitmap(bitmap: ImageBitmap | null | undefined): void {
   } catch { /* closed */ }
 }
 
-/** Re-capture video frames before export so closed ImageBitmaps cannot break Generate. */
-export async function hydrateDraftBitmapsForExport(
+/**
+ * A bitmap is usable for export when it is alive and exactly the video's size. A closed ImageBitmap reports
+ * 0x0, so one comparison covers "closed" and "captured at another size" (the original reason for re-capturing:
+ * a closed bitmap must not break Generate).
+ */
+function isUsableBitmap(b: ImageBitmap | null | undefined, w: number, h: number): b is ImageBitmap {
+  return !!b && b.width === w && b.height === h;
+}
+
+/**
+ * Make sure every bitmap the export reads is alive and native size, re-capturing ONLY the ones that are not.
+ * Before M1 (docs/V1_FREEZE.md Stage 2) this re-captured the plate and every frame on every call, three times
+ * per Generate, and never closed the replaced bitmaps (+27 bitmaps / +142 MiB live per Generate at 1080p x 5
+ * frames, measured). Nothing to re-capture returns the SAME draft object, so callers can skip a state update.
+ * `created` lists the bitmaps this call made, so a caller that does not hand them to the draft can close them.
+ * The replaced (alive but wrong-size) bitmaps are still NOT closed here: the Canvas render loop may hold them
+ * through stroMotionDraftRef and a close would throw on drawImage; closed ones need nothing.
+ */
+export async function hydrateDraftBitmaps(
   video: HTMLVideoElement,
   draft: StroMotionDraft,
-): Promise<StroMotionDraft> {
-  if (video.videoWidth === 0 || video.videoHeight === 0) return draft;
+  /** Injectable for tests; production uses the isolated capture source. */
+  capture: (video: HTMLVideoElement, timeSec: number) => Promise<ImageBitmap> = captureVideoFrameAtTime,
+): Promise<{ draft: StroMotionDraft; created: ImageBitmap[] }> {
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (w === 0 || h === 0) return { draft, created: [] };
 
-  const backgroundPlate = await captureVideoFrameAtTime(video, draft.backgroundTimeSec);
+  const created: ImageBitmap[] = [];
+  const grab = async (timeSec: number): Promise<ImageBitmap> => {
+    const bitmap = await capture(video, timeSec);
+    created.push(bitmap);
+    return bitmap;
+  };
+
+  const backgroundPlate = isUsableBitmap(draft.backgroundPlate, w, h)
+    ? draft.backgroundPlate
+    : await grab(draft.backgroundTimeSec);
+  let changed = backgroundPlate !== draft.backgroundPlate || draft.videoWidth !== w || draft.videoHeight !== h;
+
   const frames: StroMotionFrameDraft[] = [];
-
   for (const frame of draft.frames) {
-    let sourceFrame = frame.sourceFrame;
+    if (isUsableBitmap(frame.sourceFrame, w, h)) {
+      frames.push(frame);
+      continue;
+    }
+    let sourceFrame: ImageBitmap | null = frame.sourceFrame;
     try {
-      sourceFrame = await captureVideoFrameAtTime(video, frame.timeSec);
+      sourceFrame = await grab(frame.timeSec);
+      changed = true;
     } catch {
       sourceFrame = frame.sourceFrame;
     }
     frames.push({ ...frame, sourceFrame });
   }
 
-  // Do NOT close old bitmaps here — the Canvas render loop may still hold references
-  // to them via stroMotionDraftRef.current. Closing eagerly causes InvalidStateError
-  // on drawImage. Let GC handle the old ones after React commits the new draft.
+  if (!changed) return { draft, created: [] };
+  return { draft: { ...draft, backgroundPlate, frames, videoWidth: w, videoHeight: h }, created };
+}
 
-  return {
-    ...draft,
-    backgroundPlate,
-    frames,
-    videoWidth: video.videoWidth,
-    videoHeight: video.videoHeight,
-  };
+/** Same contract as before (returns the draft to export); now re-captures only what is not usable. */
+export async function hydrateDraftBitmapsForExport(
+  video: HTMLVideoElement,
+  draft: StroMotionDraft,
+): Promise<StroMotionDraft> {
+  return (await hydrateDraftBitmaps(video, draft)).draft;
 }
 
 export async function exportStroMotionDraftPng(
@@ -66,7 +101,8 @@ export async function exportStroMotionDraftPng(
     throw new Error('All frames must be marked Ready before export.');
   }
 
-  const hydrated = await hydrateDraftBitmapsForExport(video, source);
+  // Bitmaps re-captured here belong to this export only (the draft is not updated): close them when done.
+  const { draft: hydrated, created } = await hydrateDraftBitmaps(video, source);
   const w = hydrated.videoWidth;
   const h = hydrated.videoHeight;
   const canvas = document.createElement('canvas');
@@ -76,19 +112,27 @@ export async function exportStroMotionDraftPng(
   if (!ctx) throw new Error('Canvas 2D unavailable');
 
   let endPlate: ImageBitmap | null = null;
-  if (options?.background === 'end' && options.endTimeSec !== undefined) {
-    try { endPlate = await captureVideoFrameAtTime(video, options.endTimeSec); } catch { /* fallback to start */ }
+  try {
+    if (options?.background === 'end' && options.endTimeSec !== undefined) {
+      try { endPlate = await captureVideoFrameAtTime(video, options.endTimeSec); } catch { /* fallback to start */ }
+    }
+
+    renderStroMotionDraftComposite(ctx, hydrated, {
+      dest: { x: 0, y: 0, w, h },
+      previewMode: false,
+      resolveMask: getCompositeMask,
+      background: options?.background ?? 'start',
+      videoOrder: options?.videoOrder ?? 'forward',
+      endPlate,
+      ...(options?.opacity !== undefined ? { fadeMode: 'uniform' as const, opacity: options.opacity } : {}),
+    });
+
+    return canvas.toDataURL('image/png');
+  } finally {
+    // Everything this call captured is local to it (not in any draft, not read by the render loop).
+    for (const b of created) closeBitmap(b);
+    closeBitmap(endPlate);
+    canvas.width = 0;
+    canvas.height = 0;
   }
-
-  renderStroMotionDraftComposite(ctx, hydrated, {
-    dest: { x: 0, y: 0, w, h },
-    previewMode: false,
-    resolveMask: getCompositeMask,
-    background: options?.background ?? 'start',
-    videoOrder: options?.videoOrder ?? 'forward',
-    endPlate,
-    ...(options?.opacity !== undefined ? { fadeMode: 'uniform' as const, opacity: options.opacity } : {}),
-  });
-
-  return canvas.toDataURL('image/png');
 }
