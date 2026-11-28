@@ -125,11 +125,10 @@ export function createBlobURL(blob: Blob): string {
 /**
  * Extension for an exported video — derived from the BLOB, never assumed.
  *
- * The Generate export records WebM and converts it to MP4, but falls back to the
- * unconverted WebM when ffmpeg cannot run (CDN blocked, WASM load failure, a
- * non-zero exec). Naming that fallback `.mp4` shipped a Matroska stream inside an
- * MP4 filename, which every OS player rejects as "not supported" — the file was
- * fine, its name was a lie. Ask the blob what it is.
+ * The Generate export records MP4 where the browser can (Safari, iPhone browsers,
+ * current Chrome/Edge) and WebM otherwise; nothing is converted. Naming a WebM
+ * `.mp4` shipped a Matroska stream inside an MP4 filename, which every OS player
+ * rejects as "not supported" — the file was fine, its name was a lie. Ask the blob what it is.
  */
 export function videoFileExtForBlob(blob: Blob | null | undefined): 'mp4' | 'webm' {
   return blob?.type?.includes('mp4') ? 'mp4' : 'webm';

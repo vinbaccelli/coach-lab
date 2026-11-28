@@ -19,7 +19,6 @@
  */
 
 import { webmFixDuration } from 'webm-fix-duration';
-import { convertWebmToMp4ForScreenRecord } from '@/lib/ffmpegWebmToMp4';
 import { scaledExportSize, hubFinalExport } from '@/lib/exportEstimate';
 import {
   emptyExportError, holdResumeSeek, holdSeekLanded, NO_FRAME_GIVE_UP_MS, outputProgress, resumeAction, RESUME_FAILED_TEXT, runOverlay, type OverlayFn,
@@ -617,17 +616,8 @@ export async function exportEditedVideo(
     if (/mp4/i.test(mime)) return { ok: true, blob: result, ext: 'mp4', rate, audioCaptured };
 
     if (signal?.aborted) return CANCELLED;
-    onProgress?.('Converting to MP4…');
-    const conv = await convertWebmToMp4ForScreenRecord(
-      result,
-      videoBitsPerSecond !== undefined ? { videoBitsPerSecond } : undefined,
-    );
-    if (signal?.aborted) return CANCELLED;
-    if (conv.ok) {
-      onDiag?.(`audio: final mp4 has ${(await containerAudioTracks(conv.blob)) ?? 'an unreadable number of'} audio track(s)`);
-      return { ok: true, blob: conv.blob, ext: 'mp4', rate, audioCaptured };
-    }
-    return { ok: false, error: 'Could not convert the edited recording to MP4.' };
+    // This browser cannot record MP4: the WebM is the result (the caller names the file by its real extension).
+    return { ok: true, blob: result, ext: 'webm', rate, audioCaptured };
   } catch (e) {
     closeAudio();
     try { URL.revokeObjectURL(url); } catch { /* noop */ }
