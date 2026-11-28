@@ -45,6 +45,7 @@ import { ADD_OBJECT_STAGE, cancelScheduledEditorRelease, keepSamAfterAdd, releas
 import { unionMasks } from '@/lib/stroMotionDraft/maskUnion';
 import { recordStage } from '@/lib/restartBreadcrumb';
 import { ENABLE_MOTION_LAYER_PRECISION } from '@/lib/featureFlags';
+import { SamBackendBadge } from '@/components/stroMotion/SamBackendBadge';
 
 /**
  * The editor's tool set. `racket` is a CLICK tool, not a brush — it prompts SAM
@@ -1265,6 +1266,7 @@ export default function FrameMaskEditor({
         padding: isMobile ? 8 : 16,
       }}
     >
+      <SamBackendBadge />
       <div
         style={{
           width: 'min(1180px, 100%)',

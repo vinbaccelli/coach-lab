@@ -24,3 +24,7 @@ let lastBackend: SamBackend | null = null;
 export function noteSamBackend(b: SamBackend | undefined): void { if (b === 'mobile' || b === 'sam2') lastBackend = b; }
 /** True when the Object tool is (or is about to be) running the light model. */
 export function samBackendIsMobile(): boolean { return lastBackend ? lastBackend === 'mobile' : mobileSamEnabled(); }
+/** Which model last encoded a frame, or null before any Object select ran. Read by the test-build label. */
+export function lastSamBackend(): SamBackend | null { return lastBackend; }
+/** The label is for test builds only: Vercel previews and local dev, never production (anglemotion.com). */
+export function showSamBackendLabel(): boolean { return process.env.NEXT_PUBLIC_SENTRY_ENVIRONMENT !== 'production'; }
