@@ -1451,14 +1451,14 @@ export default function FrameMaskEditor({
             <Redo2 size={13} style={{ marginRight: 4, verticalAlign: -2 }} />Redo
           </button>
           <span style={{ flex: 1 }} />
-          {onMarkReadyAndNext && frameStatus !== 'ready' ? (
+          {onMarkReadyAndNext ? (
             <button
               type="button"
               style={{ ...toolBtn, border: '1px solid var(--cl-success)', background: 'rgba(52,199,89,0.22)', fontWeight: 700 }}
               onClick={onMarkReadyAndNext}
-              title="Mark ready and open next frame"
+              title={frameStatus === 'ready' ? 'Open the next frame' : 'Mark ready and open next frame'}
             >
-              <Check size={13} style={{ marginRight: 4, verticalAlign: -2 }} />Ready &amp; Next
+              {frameStatus === 'ready' ? null : <Check size={13} style={{ marginRight: 4, verticalAlign: -2 }} />}{frameStatus === 'ready' ? 'Next frame' : 'Ready \u0026 Next'}
               <ChevronRight size={13} style={{ marginLeft: 2, verticalAlign: -2 }} />
             </button>
           ) : null}
@@ -1931,7 +1931,9 @@ export default function FrameMaskEditor({
             <div
               style={{
                 position: 'absolute',
-                bottom: 8,
+                // Top-right, not bottom-right: on a phone the canvas is short and sits partly below the visible panel, so a bottom-anchored
+                // cluster lost its lower rows; anchored to the top, Zoom in / Zoom out are always on screen.
+                top: 8,
                 right: 8,
                 display: 'flex',
                 flexDirection: 'column',
@@ -1949,41 +1951,55 @@ export default function FrameMaskEditor({
               onPointerMove={(e) => e.stopPropagation()}
               onWheel={(e) => e.stopPropagation()}
             >
-              <button
-                type="button"
-                style={viewCtrlBtn}
-                title="Zoom in"
-                aria-label="Zoom in"
-                disabled={zoom >= MASK_ZOOM_MAX - 0.0001}
-                onClick={() => zoomBy(ZOOM_BUTTON_STEP)}
-              >
-                <ZoomIn size={16} />
-              </button>
-              <button
-                type="button"
-                style={viewCtrlBtn}
-                title="Zoom out"
-                aria-label="Zoom out"
-                disabled={zoom <= MASK_ZOOM_MIN + 0.0001}
-                onClick={() => zoomBy(-ZOOM_BUTTON_STEP)}
-              >
-                <ZoomOut size={16} />
-              </button>
-
-              {/* Directional pan — only meaningful once zoomed in, so it appears
-                  with the zoom rather than sitting permanently inert. */}
-              {zoom > MASK_ZOOM_MIN + 0.0001 ? (
-                <>
+              {/* A 3-column grid (3 rows when zoomed): the old single column grew to 7 rows once zoomed, taller than the
+                  editor's canvas on a phone, so the top buttons (Zoom in) were pushed out of view and hard to reach. */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 32px)', gap: 4 }}>
+                <button
+                  type="button"
+                  style={viewCtrlBtn}
+                  title="Zoom in"
+                  aria-label="Zoom in"
+                  disabled={zoom >= MASK_ZOOM_MAX - 0.0001}
+                  onClick={() => zoomBy(ZOOM_BUTTON_STEP)}
+                >
+                  <ZoomIn size={16} />
+                </button>
+                <button
+                  type="button"
+                  style={viewCtrlBtn}
+                  title="Zoom out"
+                  aria-label="Zoom out"
+                  disabled={zoom <= MASK_ZOOM_MIN + 0.0001}
+                  onClick={() => zoomBy(-ZOOM_BUTTON_STEP)}
+                >
+                  <ZoomOut size={16} />
+                </button>
+                {zoom > MASK_ZOOM_MIN + 0.0001 ? (
                   <button
                     type="button"
                     style={viewCtrlBtn}
-                    title="Move view up"
-                    aria-label="Move view up"
-                    onClick={() => panByFraction(0, PAN_BUTTON_STEP)}
+                    title="Reset zoom & position"
+                    aria-label="Reset zoom and position"
+                    onClick={resetView}
                   >
-                    <ChevronUp size={16} />
+                    <Home size={15} />
                   </button>
-                  <div style={{ display: 'flex', gap: 4 }}>
+                ) : <span />}
+
+                {/* Directional pan — only meaningful once zoomed in. */}
+                {zoom > MASK_ZOOM_MIN + 0.0001 ? (
+                  <>
+                    <span />
+                    <button
+                      type="button"
+                      style={viewCtrlBtn}
+                      title="Move view up"
+                      aria-label="Move view up"
+                      onClick={() => panByFraction(0, PAN_BUTTON_STEP)}
+                    >
+                      <ChevronUp size={16} />
+                    </button>
+                    <span />
                     <button
                       type="button"
                       style={viewCtrlBtn}
@@ -1996,33 +2012,24 @@ export default function FrameMaskEditor({
                     <button
                       type="button"
                       style={viewCtrlBtn}
+                      title="Move view down"
+                      aria-label="Move view down"
+                      onClick={() => panByFraction(0, -PAN_BUTTON_STEP)}
+                    >
+                      <ChevronDown size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      style={viewCtrlBtn}
                       title="Move view right"
                       aria-label="Move view right"
                       onClick={() => panByFraction(-PAN_BUTTON_STEP, 0)}
                     >
                       <ChevronRight size={16} />
                     </button>
-                  </div>
-                  <button
-                    type="button"
-                    style={viewCtrlBtn}
-                    title="Move view down"
-                    aria-label="Move view down"
-                    onClick={() => panByFraction(0, -PAN_BUTTON_STEP)}
-                  >
-                    <ChevronDown size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    style={viewCtrlBtn}
-                    title="Reset zoom & position"
-                    aria-label="Reset zoom and position"
-                    onClick={resetView}
-                  >
-                    <Home size={15} />
-                  </button>
-                </>
-              ) : null}
+                  </>
+                ) : null}
+              </div>
             </div>
 
             {/* Zoom level readout */}
