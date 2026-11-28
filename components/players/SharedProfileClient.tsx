@@ -296,6 +296,7 @@ export default function SharedProfileClient({ token }: { token: string }) {
         ) : null}
         <HistoryFeed
           viewer="player"
+          reportHref={(entryId) => `/share/${token}/reports/${entryId}`}
           fetchPage={fetchHistory}
           sections={HISTORY_SECTIONS.filter((s) => data.permissions?.see[s] ?? true)}
           order={data.timelineOrder ?? null}

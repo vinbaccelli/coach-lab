@@ -105,10 +105,14 @@ export async function loadHistory(client: SupabaseClient, o: HistoryOptions): Pr
     jobs.push(byCreated(() => withAuthor(db.from('player_timeline_items').select('id,kind,body,media_url,youtube_id,created_at,author').eq('player_id', o.playerId).in('kind', kinds)), f, c, L)
       .then((r) => take(r, itemFromTimeline)));
   }
-  // Reports: the coach's only (never through a share link).
-  if (o.viewer === 'coach' && !coachOnly && want('report', 'technical')) {
-    jobs.push(byCreated(() => db.from('player_entries').select('id,category,folder_label,body_text,screenshots,created_at').eq('player_id', o.playerId), f, c, L)
-      .then((r) => take(r, itemFromReport)));
+  // Reports: the coach sees all of them. A share link sees only MATCH reports (the match analysis), and only when the link may see the
+  // Technical section; the coach's technical analysis entries (notes, annotated screenshots) never go through a link.
+  const reportsAllowed = o.viewer === 'coach' || (o.sections?.includes('technical') ?? false);
+  if (reportsAllowed && !coachOnly && want('report', 'technical')) {
+    jobs.push(byCreated(() => {
+      const q = db.from('player_entries').select('id,category,folder_label,body_text,screenshots,created_at').eq('player_id', o.playerId);
+      return o.viewer === 'link' ? q.eq('category', 'match') : q;
+    }, f, c, L).then((r) => take(r, itemFromReport)));
   }
   // The change log (Blueprint updates…), in the section it belongs to. A share link sees the entries of the sections it may see.
   if (!coachOnly && (!f.types || f.types.includes('change'))) {

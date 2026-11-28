@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 const NO_STORE = { 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer' };
 
 /**
- * The player's timeline through the share link: only the sections the link may see (reports,
+ * The player's timeline through the share link: only the sections the link may see (match reports only, with the Technical section;
  * draft and archived plans, and archived trackers are never sent), same paging and filters as the
  * coach's.
  */
