@@ -13,6 +13,7 @@
  * still uses the in-page SAM module.
  */
 import type { SamPromptBox } from '@/lib/stroMotionDraft/samRacket';
+import { installWasmMemoryCap } from '@/lib/stroMotionDraft/wasmMemoryCap';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -33,17 +34,50 @@ for (const level of ['log', 'warn'] as const) {
 
 type DetectMsg = { type: 'detect'; id: number; frame: ImageBitmap; keypoints: unknown; vw: number; vh: number; unitFloorNorm: number | null; label: string };
 type SegmentMsg = { type: 'segment'; id: number; frame: ImageBitmap; key: string; box: SamPromptBox };
-type InitMsg = { type: 'init'; id: number; phone: boolean };
+type InitMsg = { type: 'init'; id: number; phone: boolean; mobileSam?: boolean };
 // Mask-editor Object tool: encode once (embedding stays cached in THIS worker), then decode per click.
 type EncodeMsg = { type: 'encode'; id: number; frame: ImageBitmap; key: string };
 type DecodePointsMsg = { type: 'decodePoints'; id: number; key: string; points: unknown; force: number | null };
 type Msg = DetectMsg | SegmentMsg | InitMsg | EncodeMsg | DecodePointsMsg;
+
+let useMobileSam = false;
+/** Which backend encoded each frame ('mobile' = MobileSAM, 'sam2' = SAM-2). Decodes must use the module that encoded. */
+const backendOf = new Map<string, 'mobile' | 'sam2'>();
+/** MobileSAM failed to load or run in this worker: every later frame goes straight to SAM-2. */
+let mobileFailed = false;
+let mobileError = '';
+type SamModule = Pick<typeof import('@/lib/stroMotionDraft/samRacket'), 'encodeFrameForRacket' | 'decodeRacketMask' | 'decodeRacketMaskFromBox' | 'dropRacketEncoding' | 'getLastSamError'>;
+const loadSam2 = (): Promise<SamModule> => import('@/lib/stroMotionDraft/samRacket');
+const loadMobile = (): Promise<SamModule> => import('@/lib/stroMotionDraft/samMobile');
+
+/**
+ * Encode a frame with MobileSAM, falling back to SAM-2 if MobileSAM cannot load or run (missing file, offline, an unsupported device).
+ * The caller learns which backend holds the embedding (the editor keeps the light model resident, never the heavy one).
+ */
+async function encodeWithFallback(key: string, frame: ImageBitmap): Promise<{ enc: { ms: number; bytes: number } | null; err: string; backend: 'mobile' | 'sam2' }> {
+  if (useMobileSam && !mobileFailed) {
+    const mob = await loadMobile();
+    const enc = await mob.encodeFrameForRacket(key, frame);
+    if (enc) { backendOf.set(key, 'mobile'); return { enc, err: '', backend: 'mobile' }; }
+    mobileFailed = true;
+    mobileError = mob.getLastSamError();
+    console.warn('[samMobile] unavailable — falling back to SAM-2:', mobileError);
+  }
+  const sam = await loadSam2();
+  const enc = await sam.encodeFrameForRacket(key, frame);
+  if (enc) backendOf.set(key, 'sam2');
+  // The notice shows BOTH failures: with only SAM-2's error a MobileSAM problem was invisible.
+  return { enc, err: enc ? '' : (mobileError ? `MobileSAM: ${mobileError} | SAM-2: ${sam.getLastSamError()}` : sam.getLastSamError()), backend: 'sam2' };
+}
+const samFor = (key: string): Promise<SamModule> => (backendOf.get(key) === 'mobile' ? loadMobile() : loadSam2());
 
 ctx.onmessage = async (e: MessageEvent<Msg>) => {
   const m = e.data;
   try {
     if (m.type === 'init') {
       (globalThis as { __stroPhoneBudget?: boolean }).__stroPhoneBudget = m.phone; // read through the window shim by isPhoneBudgetActive()
+      if (m.phone) installWasmMemoryCap(); // BEFORE any model module creates its ONNX runtime memory
+      useMobileSam = m.mobileSam === true; // OFF unless the page's switch is on (lib/stroMotionDraft/mobileSamSwitch.ts)
       ctx.postMessage({ id: m.id, ok: true });
       return;
     }
@@ -66,29 +100,29 @@ ctx.onmessage = async (e: MessageEvent<Msg>) => {
       return;
     }
     if (m.type === 'encode') {
-      const sam = await import('@/lib/stroMotionDraft/samRacket');
-      let enc = null;
+      let r: Awaited<ReturnType<typeof encodeWithFallback>> = { enc: null, err: 'encode failed', backend: 'sam2' };
       try {
-        enc = await sam.encodeFrameForRacket(m.key, m.frame);
+        r = await encodeWithFallback(m.key, m.frame);
       } finally {
         try { m.frame.close(); } catch { /* already closed */ }
       }
-      ctx.postMessage({ id: m.id, ok: true, enc, err: enc ? '' : sam.getLastSamError() });
+      ctx.postMessage({ id: m.id, ok: true, enc: r.enc, err: r.err, backend: r.backend });
       return;
     }
     if (m.type === 'decodePoints') {
-      const sam = await import('@/lib/stroMotionDraft/samRacket');
+      const sam = await samFor(m.key);
       const seg = await sam.decodeRacketMask(m.key, m.points as never, m.force ?? undefined);
       ctx.postMessage({ id: m.id, ok: true, seg }, seg ? [seg.mask.data.buffer] : []);
       return;
     }
     if (m.type === 'segment') {
-      const sam = await import('@/lib/stroMotionDraft/samRacket');
       let reply: Record<string, unknown> = { id: m.id, ok: true, seg: null, reason: 'SAM unavailable on this machine' };
       let transfer: Transferable[] = [];
+      let sam: SamModule | null = null;
       try {
-        const enc = await sam.encodeFrameForRacket(m.key, m.frame);
-        if (enc) {
+        const r = await encodeWithFallback(m.key, m.frame);
+        if (r.enc) {
+          sam = await samFor(m.key);
           const seg = await sam.decodeRacketMaskFromBox(m.key, m.box);
           if (seg) {
             reply = { id: m.id, ok: true, seg: { mask: seg.mask, chosen: seg.chosen, candidates: seg.candidates } };
@@ -99,7 +133,7 @@ ctx.onmessage = async (e: MessageEvent<Msg>) => {
         }
       } finally {
         try { m.frame.close(); } catch { /* already closed */ }
-        try { sam.dropRacketEncoding(m.key); } catch { /* best-effort */ }
+        try { sam?.dropRacketEncoding(m.key); backendOf.delete(m.key); } catch { /* best-effort */ }
       }
       ctx.postMessage(reply, transfer);
       return;

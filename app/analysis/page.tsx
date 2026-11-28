@@ -55,7 +55,8 @@ const GenerateWorkspace = React.lazy(() => import('@/components/metrics/Generate
 // Static (not lazy): Generate must open with no chunk fetch on the click.
 import MetricsExportPanel from '@/components/metrics/MetricsExportPanel';
 import VideoDebugBox from '@/components/VideoDebugBox';
-import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, videoDetailText, videoStateText } from '@/lib/firstFrame';
+import { ensureFirstFrame, firstFrameLog, firstFrameState, ignoreLoadError, tapHintVisible, videoDetailText, videoStateText } from '@/lib/firstFrame';
+import FirstFrameTapHint from '@/components/FirstFrameTapHint';
 import { recoveryPlan, reloadSameSource, shouldRestartFromStart, watchStuckPlayback } from '@/lib/seekWait';
 import { watchPassFrames } from '@/lib/analysisFrameLog';
 import { displayedSection, metricsSectionShown, motionSectionShown, selectedSection, type TrackScope } from '@/lib/aiTrackScope';
@@ -204,7 +205,6 @@ import {
   isolateYouTubePlayerSync,
 } from '@/lib/embedCaptureSession';
 import { getTabCaptureStream, stopAllTracks } from '@/lib/tabCaptureRecording';
-import { convertWebmBlobToMp4, disposeFfmpegWasm } from '@/lib/ffmpegWebmToMp4';
 import { videoFileExtForBlob } from '@/lib/recordingUtils';
 import { saveImageFromUrl } from '@/lib/saveImage';
 const SaveReportModal = React.lazy(() => import('@/components/shared/SaveReportModal'));
@@ -809,6 +809,8 @@ function Home() {
 
   /** True when Safari (or any browser) blocked video.play() and we need a user-gesture tap */
   const [showTapToPlay, setShowTapToPlay]   = useState(false);
+  // Slot A is in the first-frame S5 state: no frame yet, a tap on the video is awaited (lib/firstFrame.ts).
+  const [firstFrameTapNeededA, setFirstFrameTapNeededA] = useState(false);
   const [videoLoadErrorA, setVideoLoadErrorA] = useState<string | null>(null);
   /** Error loading the bundled strategy-board court asset (see loadBundledCourt) */
   const [courtLoadError, setCourtLoadError] = useState<string | null>(null);
@@ -1933,16 +1935,8 @@ function Home() {
   useEffect(() => { setRulerCalibration(null); }, [videoSrc]);
 
   /**
-   * Record the replay to MP4 — SLOW-MASTER strategy: the section is always
-   * recorded with the video playing at ≤0.25× (the regime where pose detection
-   * has time to converge → maximum-quality skeleton on every frame), then the
-   * ffmpeg conversion retimes the master to the coach's chosen speed. Choosing
-   * 1× still gets the 0.25×-quality skeleton. Holds are recorded proportionally
-   * longer so they come out exactly `holdSec` after retiming.
-   *
-   * TRACK-BACKED UPGRADE: when a Precision AI Track covers the section (auto-run
-   * if missing), the skeleton is frame-exact at any speed, so the recording runs
-   * directly at the coach's chosen rate — the slow-master is fallback only.
+   * Record the replay to MP4. The browser records the section directly (MP4 where it can, otherwise WebM) at the coach's chosen speed;
+   * no conversion step. A Precision AI Track covers the section (auto-run if missing), so the skeleton is frame-exact at any speed.
    */
   const recordReplayToMp4 = useCallback(async (includedIds?: string[]) => {
     if (!snapshots.length || generateRecording) return;
@@ -1991,7 +1985,9 @@ function Home() {
       // silently records a single frozen frame).
       stream = canvasRef.current?.captureStream?.(30) ?? null;
       if (!stream) { setProcessingStatus('Recording not supported on this device'); return; }
-      const mimeCandidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+      // MP4 first: a browser that records H.264 MP4 itself (Safari, every iPhone browser, current Chrome/Edge) hands over a finished MP4, so
+      // nothing has to be converted afterwards. Others record WebM and the file is delivered as WebM.
+      const mimeCandidates = ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
       const mime = mimeCandidates.find(m => typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m)) ?? '';
       let recorder: MediaRecorder;
       try { recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined); }
@@ -2006,9 +2002,11 @@ function Home() {
       // the baked track — frame-exact at any rate). The ≤0.25× slow-master +
       // retime survives only as the fallback when no track could be produced.
       const targetRate = generateReplayRate > 0 ? generateReplayRate : 0.25;
-      const masterRate = trackBacked ? targetRate : Math.min(0.25, targetRate);
-      const holdScale = targetRate / masterRate;        // hold longer → correct after retime
-      const retimeFactor = masterRate / targetRate;     // <1 speeds the master up
+      // No retime any more (it needed the FFmpeg conversion): the replay is always recorded at the coach's speed. Without a baked track the
+      // skeleton is drawn live at that speed (slightly less exact than the old slow-master pass, which only ran when no track existed).
+      const masterRate = targetRate;
+      const holdScale = 1;
+      const retimeFactor = 1;
 
       setProcessingStatus(trackBacked
         ? `Recording at ${targetRate}× with frame-exact skeleton…`
@@ -2017,26 +2015,12 @@ function Home() {
       recordStage('Generate: recording the replay');
       await handleReplaySnapshots(recorder, { playRate: masterRate, holdScale });
       const webmBlob = await done;
-      recordStage('Generate: recorded, converting to MP4');
-      setProcessingStatus(retimeFactor < 1 ? `Rendering at ${targetRate}× speed…` : 'Converting to MP4…');
-      let finalBlob = webmBlob;
-      const conv = await convertWebmBlobToMp4(webmBlob, { retimeFactor });
-      if (conv.ok) {
-        finalBlob = conv.blob;
-      } else {
-        // ALWAYS say so. This used to be reported only when `retimeFactor < 1`,
-        // but the track-backed path records at the coach's target rate, which
-        // makes retimeFactor exactly 1 — the common case. So the usual outcome of
-        // a failed conversion was a WebM handed over with no warning at all (and,
-        // before the download fix, named `.mp4`). A failed conversion is now
-        // always visible, and it also costs the retime when one was needed.
-        console.warn('[Generate] MP4 conversion failed:', conv.error);
-        const notice = retimeFactor < 1
-          ? `MP4 conversion failed — saved as WebM at the ${masterRate}× recording speed. (${conv.error})`
-          : `MP4 conversion failed — saved as WebM instead. It still plays in the browser, and the download keeps its real .webm name. (${conv.error})`;
-        // Both surfaces: the banner for the paths where it is visible (recording
-        // started from the snapshot strip, which is bottom-anchored), and the
-        // workspace notice for the path where the modal covers the banner.
+      recordStage('Generate: recorded');
+      const finalBlob = webmBlob;
+      const isMp4 = /mp4/i.test(finalBlob.type);
+      if (!isMp4) {
+        // This browser cannot record MP4: the WebM is the result. It plays in the browser and the download keeps its real .webm name.
+        const notice = 'This browser saved the video as WebM, not MP4. It plays in the browser; for an MP4, record on an iPhone or in current Chrome or Safari.';
         setProcessingStatus(notice);
         setGenerateConversionNotice(notice);
       }
@@ -2045,7 +2029,7 @@ function Home() {
       setGenerateVideoUrl(url);
       setGenerateVideoBlob(finalBlob);
       recordStage(`Generate: video ready (${Math.round(finalBlob.size / 1e6)} MB), showing the result`);
-      if (conv.ok) {
+      if (isMp4) {
         setProcessingStatus('Replay video ready — download below');
         setGenerateConversionNotice(null);
       }
@@ -3911,16 +3895,14 @@ function Home() {
     return () => ro.disconnect();
   }, [updateSize]);
 
-  /** Drop FFmpeg WASM when leaving the page so memory does not linger after tab close. */
+  /** Stop the global pose worker when leaving the page so memory does not linger after tab close. */
   useEffect(() => {
     const onBeforeUnload = () => {
-      disposeFfmpegWasm();
       terminateGlobalPoseWorker();
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => {
       window.removeEventListener('beforeunload', onBeforeUnload);
-      disposeFfmpegWasm();
       terminateGlobalPoseWorker();
     };
   }, []);
@@ -4537,7 +4519,6 @@ function Home() {
     // await point will catch this and run the cleaner before exiting.
     embedCaptureCancelRef.current = true;
     embedShareInFlightRef.current = false;
-    disposeFfmpegWasm();
     setCaptureBusy(false);
     ytPlayerARef.current = null;
     ytPlayerBRef.current = null;
@@ -4877,6 +4858,7 @@ function Home() {
       tapTarget: () => video.parentElement,
       debug: vdebug,
       onFrame: () => { requestCanvasPaintAfterVideoLoad('A'); void canvasRef.current?.waitForRender?.(); },
+      onTapNeeded: setFirstFrameTapNeededA,
     }) : null;
 
     return () => {
@@ -6048,7 +6030,6 @@ function Home() {
     setCaptureDownloadStatus('idle');
     setShowCaptureSaveToast(false);
     setCaptureBusy(false);
-    disposeFfmpegWasm();
     // Detect YouTube playlist-only URLs (no video ID) and surface a clear error.
     try {
       const parsedUrl = new URL(raw.includes('://') ? raw : `https://${raw}`);
@@ -6513,28 +6494,15 @@ function Home() {
 
         try {
           sessionCaptureBlobRef.current = result.blob;
-          sessionMp4BlobRef.current = null;
-          setCaptureDownloadStatus('preparing');
-          const conversionGen = ++captureMp4ConversionGenRef.current;
-          const capturedBlob = result.blob;
-          void (async () => {
-            try {
-              const conv = await convertWebmBlobToMp4(capturedBlob);
-              if (conversionGen !== captureMp4ConversionGenRef.current) return;
-              if (conv.ok) {
-                sessionMp4BlobRef.current = conv.blob;
-                setCaptureDownloadStatus('ready_mp4');
-              } else {
-                sessionMp4BlobRef.current = null;
-                setCaptureDownloadStatus('ready_webm');
-              }
-            } catch (convErr) {
-              console.warn('[AngleMotion capture] MP4 conversion failed:', convErr);
-              if (conversionGen !== captureMp4ConversionGenRef.current) return;
-              sessionMp4BlobRef.current = null;
-              setCaptureDownloadStatus('ready_webm');
-            }
-          })();
+          // No conversion any more: a browser that recorded MP4 (Safari, iPhone browsers, current Chrome) offers that file; otherwise the WebM.
+          if (/mp4/i.test(result.blob.type)) {
+            sessionMp4BlobRef.current = result.blob;
+            setCaptureDownloadStatus('ready_mp4');
+          } else {
+            sessionMp4BlobRef.current = null;
+            setCaptureDownloadStatus('ready_webm');
+          }
+          captureMp4ConversionGenRef.current += 1;
 
           if (panel === 'A') ytPlayerARef.current = null;
           else ytPlayerBRef.current = null;
@@ -8722,6 +8690,9 @@ onTrimChange={analysisTimelineExtras.onTrimChange}
                       </button>
                     </div>
                   </div>
+                ) : null}
+                {tapHintVisible({ waitingForTap: firstFrameTapNeededA, hasVideo: !!videoSrc, loadError: !!videoLoadErrorA, tapToPlay: showTapToPlay }) ? (
+                  <FirstFrameTapHint insetLeft={panelToolbarInset} />
                 ) : null}
                 {showTapToPlay && videoSrc && !videoLoadErrorA ? (
                   <div

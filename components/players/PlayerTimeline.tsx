@@ -134,6 +134,7 @@ export default function PlayerTimeline({ playerId, playerName, canEdit, order, o
         order={order ?? null}
         onOrderChange={canEdit ? onOrderChange : undefined}
         onDelete={canEdit ? remove : undefined}
+        reportHref={(entryId) => `/players/${playerId}/reports/${entryId}`}
       />
     </div>
   );

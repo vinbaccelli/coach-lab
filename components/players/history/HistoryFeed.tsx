@@ -2,6 +2,7 @@
 
 import DriveImage from '@/components/reports/DriveImage';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import Link from 'next/link';
 import { SlidersHorizontal, X } from 'lucide-react';
 import {
   HISTORY_SECTIONS, HISTORY_TYPES, SECTION_LABELS, TYPE_LABELS,
@@ -36,7 +37,7 @@ const pressed = (on: boolean): CSSProperties => ({
  * (section, kind, who added it, dates). With a saved manual order and no filter, everything is
  * loaded and shown in that order (the coach can drag); new items stay on top.
  */
-export default function HistoryFeed({ fetchPage, viewer, sections = [...HISTORY_SECTIONS], reloadKey = 0, order = null, onOrderChange, onDelete }: {
+export default function HistoryFeed({ fetchPage, viewer, sections = [...HISTORY_SECTIONS], reloadKey = 0, order = null, onOrderChange, onDelete, reportHref }: {
   fetchPage: (params: URLSearchParams) => Promise<HistoryPage>;
   viewer: 'coach' | 'player';
   /** The sections this viewer can see (the filter offers only these). */
@@ -46,6 +47,8 @@ export default function HistoryFeed({ fetchPage, viewer, sections = [...HISTORY_
   order?: string[] | null;
   onOrderChange?: (keys: string[]) => Promise<void>;
   onDelete?: (item: HistoryItem) => Promise<void>;
+  /** Where a saved report opens (coach view): with it, a report on the timeline links to its page. */
+  reportHref?: (entryId: string) => string;
 }) {
   const [filter, setFilter] = useState<Filter>(EMPTY);
   const [open, setOpen] = useState(false);
@@ -143,7 +146,7 @@ export default function HistoryFeed({ fetchPage, viewer, sections = [...HISTORY_
     }
   };
 
-  const offeredTypes = HISTORY_TYPES.filter((t) => (viewer === 'coach' || (t !== 'report' && t !== 'change')) && TYPE_SECTIONS[t].some((s) => sections.includes(s)));
+  const offeredTypes = HISTORY_TYPES.filter((t) => (viewer === 'coach' || t !== 'change') && TYPE_SECTIONS[t].some((s) => sections.includes(s)));
   const nActive = filter.types.length + filter.sections.length + (filter.author ? 1 : 0) + (filter.from || filter.to ? 1 : 0);
 
   const row = (t: HistoryItem, handle: React.ReactNode) => (
@@ -151,7 +154,11 @@ export default function HistoryFeed({ fetchPage, viewer, sections = [...HISTORY_
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
           {handle}
-          <span style={{ fontSize: 13, fontWeight: 700, overflowWrap: 'anywhere' }}>{t.title}</span>
+          {t.type === 'report' && t.entryId && reportHref ? (
+            <Link href={reportHref(t.entryId)} style={{ fontSize: 13, fontWeight: 700, overflowWrap: 'anywhere', color: 'var(--cl-accent)', textDecoration: 'underline' }}>{t.title}</Link>
+          ) : (
+            <span style={{ fontSize: 13, fontWeight: 700, overflowWrap: 'anywhere' }}>{t.title}</span>
+          )}
           <span style={{ ...muted, fontSize: 11 }}>{SECTION_LABELS[t.section]}</span>
           {t.author === 'link' ? <span style={badge('info')}>{viewer === 'coach' ? 'Player' : 'You'}</span> : null}
           {t.status === 'submitted' ? <span style={badge('pending')}>{viewer === 'coach' ? 'To review' : 'Waiting for review'}</span> : null}

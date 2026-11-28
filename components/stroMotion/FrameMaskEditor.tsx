@@ -45,6 +45,7 @@ import { ADD_OBJECT_STAGE, cancelScheduledEditorRelease, keepSamAfterAdd, releas
 import { unionMasks } from '@/lib/stroMotionDraft/maskUnion';
 import { recordStage } from '@/lib/restartBreadcrumb';
 import { ENABLE_MOTION_LAYER_PRECISION } from '@/lib/featureFlags';
+import { SamBackendBadge } from '@/components/stroMotion/SamBackendBadge';
 
 /**
  * The editor's tool set. `racket` is a CLICK tool, not a brush — it prompts SAM
@@ -424,9 +425,8 @@ export default function FrameMaskEditor({
     const x = (client.x - rect.left) * k;
     const y = (client.y - rect.top) * k;
     const s = Math.max(3, 18 * k);
-    const gap = s * 0.32;
     // The ring is the BRUSH itself: its radius is the brush radius in screen px (what applyBrushToMask uses), so the coach sees exactly the
-    // area that will be added or removed. The crosshair marks its centre.
+    // area that will be added or removed. Ring only, no centre cross (the cross belongs to the Object click reticle).
     const brushR = Math.max(2, brushSizeRef.current * k);
     ctx.save();
     ctx.lineCap = 'round';
@@ -436,12 +436,6 @@ export default function FrameMaskEditor({
     ]) {
       ctx.strokeStyle = pass.c;
       ctx.lineWidth = pass.w;
-      ctx.beginPath();
-      ctx.moveTo(x - s, y); ctx.lineTo(x - gap, y);
-      ctx.moveTo(x + gap, y); ctx.lineTo(x + s, y);
-      ctx.moveTo(x, y - s); ctx.lineTo(x, y - gap);
-      ctx.moveTo(x, y + gap); ctx.lineTo(x, y + s);
-      ctx.stroke();
       ctx.beginPath();
       ctx.arc(x, y, brushR, 0, Math.PI * 2);
       ctx.stroke();
@@ -605,7 +599,7 @@ export default function FrameMaskEditor({
   useEffect(() => {
     const was = prevBrushModeRef.current;
     prevBrushModeRef.current = brushMode;
-    if (was === 'racket' && brushMode !== 'racket' && releaseEditorSamWorker()) setRacketReady(false);
+    if (was === 'racket' && brushMode !== 'racket' && !keepSamAfterAdd() && releaseEditorSamWorker()) setRacketReady(false);
   }, [brushMode]);
   // PHONE: leaving the browser with the Object tool open keeps that ~850 MB resident, and iOS then kills the page in the
   // background ("The page restarted. Reason: killed by the phone while it was in the background"). Free it the moment the
@@ -1272,6 +1266,7 @@ export default function FrameMaskEditor({
         padding: isMobile ? 8 : 16,
       }}
     >
+      <SamBackendBadge />
       <div
         style={{
           width: 'min(1180px, 100%)',
@@ -1458,14 +1453,14 @@ export default function FrameMaskEditor({
             <Redo2 size={13} style={{ marginRight: 4, verticalAlign: -2 }} />Redo
           </button>
           <span style={{ flex: 1 }} />
-          {onMarkReadyAndNext && frameStatus !== 'ready' ? (
+          {onMarkReadyAndNext ? (
             <button
               type="button"
               style={{ ...toolBtn, border: '1px solid var(--cl-success)', background: 'rgba(52,199,89,0.22)', fontWeight: 700 }}
               onClick={onMarkReadyAndNext}
-              title="Mark ready and open next frame"
+              title={frameStatus === 'ready' ? 'Open the next frame' : 'Mark ready and open next frame'}
             >
-              <Check size={13} style={{ marginRight: 4, verticalAlign: -2 }} />Ready &amp; Next
+              {frameStatus === 'ready' ? null : <Check size={13} style={{ marginRight: 4, verticalAlign: -2 }} />}{frameStatus === 'ready' ? 'Next frame' : 'Ready \u0026 Next'}
               <ChevronRight size={13} style={{ marginLeft: 2, verticalAlign: -2 }} />
             </button>
           ) : null}
@@ -1938,7 +1933,9 @@ export default function FrameMaskEditor({
             <div
               style={{
                 position: 'absolute',
-                bottom: 8,
+                // Top-right, not bottom-right: on a phone the canvas is short and sits partly below the visible panel, so a bottom-anchored
+                // cluster lost its lower rows; anchored to the top, Zoom in / Zoom out are always on screen.
+                top: 8,
                 right: 8,
                 display: 'flex',
                 flexDirection: 'column',
@@ -1956,41 +1953,55 @@ export default function FrameMaskEditor({
               onPointerMove={(e) => e.stopPropagation()}
               onWheel={(e) => e.stopPropagation()}
             >
-              <button
-                type="button"
-                style={viewCtrlBtn}
-                title="Zoom in"
-                aria-label="Zoom in"
-                disabled={zoom >= MASK_ZOOM_MAX - 0.0001}
-                onClick={() => zoomBy(ZOOM_BUTTON_STEP)}
-              >
-                <ZoomIn size={16} />
-              </button>
-              <button
-                type="button"
-                style={viewCtrlBtn}
-                title="Zoom out"
-                aria-label="Zoom out"
-                disabled={zoom <= MASK_ZOOM_MIN + 0.0001}
-                onClick={() => zoomBy(-ZOOM_BUTTON_STEP)}
-              >
-                <ZoomOut size={16} />
-              </button>
-
-              {/* Directional pan — only meaningful once zoomed in, so it appears
-                  with the zoom rather than sitting permanently inert. */}
-              {zoom > MASK_ZOOM_MIN + 0.0001 ? (
-                <>
+              {/* A 3-column grid (3 rows when zoomed): the old single column grew to 7 rows once zoomed, taller than the
+                  editor's canvas on a phone, so the top buttons (Zoom in) were pushed out of view and hard to reach. */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 32px)', gap: 4 }}>
+                <button
+                  type="button"
+                  style={viewCtrlBtn}
+                  title="Zoom in"
+                  aria-label="Zoom in"
+                  disabled={zoom >= MASK_ZOOM_MAX - 0.0001}
+                  onClick={() => zoomBy(ZOOM_BUTTON_STEP)}
+                >
+                  <ZoomIn size={16} />
+                </button>
+                <button
+                  type="button"
+                  style={viewCtrlBtn}
+                  title="Zoom out"
+                  aria-label="Zoom out"
+                  disabled={zoom <= MASK_ZOOM_MIN + 0.0001}
+                  onClick={() => zoomBy(-ZOOM_BUTTON_STEP)}
+                >
+                  <ZoomOut size={16} />
+                </button>
+                {zoom > MASK_ZOOM_MIN + 0.0001 ? (
                   <button
                     type="button"
                     style={viewCtrlBtn}
-                    title="Move view up"
-                    aria-label="Move view up"
-                    onClick={() => panByFraction(0, PAN_BUTTON_STEP)}
+                    title="Reset zoom & position"
+                    aria-label="Reset zoom and position"
+                    onClick={resetView}
                   >
-                    <ChevronUp size={16} />
+                    <Home size={15} />
                   </button>
-                  <div style={{ display: 'flex', gap: 4 }}>
+                ) : <span />}
+
+                {/* Directional pan — only meaningful once zoomed in. */}
+                {zoom > MASK_ZOOM_MIN + 0.0001 ? (
+                  <>
+                    <span />
+                    <button
+                      type="button"
+                      style={viewCtrlBtn}
+                      title="Move view up"
+                      aria-label="Move view up"
+                      onClick={() => panByFraction(0, PAN_BUTTON_STEP)}
+                    >
+                      <ChevronUp size={16} />
+                    </button>
+                    <span />
                     <button
                       type="button"
                       style={viewCtrlBtn}
@@ -2003,33 +2014,24 @@ export default function FrameMaskEditor({
                     <button
                       type="button"
                       style={viewCtrlBtn}
+                      title="Move view down"
+                      aria-label="Move view down"
+                      onClick={() => panByFraction(0, -PAN_BUTTON_STEP)}
+                    >
+                      <ChevronDown size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      style={viewCtrlBtn}
                       title="Move view right"
                       aria-label="Move view right"
                       onClick={() => panByFraction(-PAN_BUTTON_STEP, 0)}
                     >
                       <ChevronRight size={16} />
                     </button>
-                  </div>
-                  <button
-                    type="button"
-                    style={viewCtrlBtn}
-                    title="Move view down"
-                    aria-label="Move view down"
-                    onClick={() => panByFraction(0, -PAN_BUTTON_STEP)}
-                  >
-                    <ChevronDown size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    style={viewCtrlBtn}
-                    title="Reset zoom & position"
-                    aria-label="Reset zoom and position"
-                    onClick={resetView}
-                  >
-                    <Home size={15} />
-                  </button>
-                </>
-              ) : null}
+                  </>
+                ) : null}
+              </div>
             </div>
 
             {/* Zoom level readout */}

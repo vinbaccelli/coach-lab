@@ -8,7 +8,7 @@
 
 import { useState } from 'react';
 import {
-  FREQUENCIES, TERMS, quote, formatMoney, payLinkFor, type SubscriptionOffer, type Frequency, type Term,
+  FREQUENCIES, TERMS, MONTHLY_TERM_NOTICE, quote, formatMoney, payLinkFor, type SubscriptionOffer, type Frequency, type Term,
 } from '@/lib/analysisPricing';
 
 export default function SubscriptionPicker({
@@ -64,6 +64,7 @@ export default function SubscriptionPicker({
           <span style={{ color: '#1a7f37', fontWeight: 600 }}>you save {money(q.savedCents)} ({q.discountPct}%)</span>
         </div>
         {!q.payUpFront && <div style={{ marginTop: 4, color: '#3a3a3c' }}>{money(q.monthlyCents)} a month for 12 months</div>}
+        {!q.payUpFront && <div role="note" style={{ marginTop: 8, fontSize: 13, color: '#3a3a3c', lineHeight: 1.45 }}>{MONTHLY_TERM_NOTICE}</div>}
       </div>
       {link ? (
         <a href={link} target="_blank" rel="noopener noreferrer"

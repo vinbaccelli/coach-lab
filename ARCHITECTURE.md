@@ -221,8 +221,8 @@ Deterministic replay built entirely on snapshots (`handleGenerateSnapshots`,
   restore state → freeze 3 s → `playbackRate = 0.25` → play until next snapshot
   `timeSec` → pause + snap → repeat. Each snapshot visited once, 3 s each, no
   interpolated state.
-- **MP4 export** (optional): records the Canvas `captureStream` during replay →
-  `convertWebmBlobToMp4` (`lib/ffmpegWebmToMp4.ts`). Output only; does not affect
+- **MP4 export** (optional): records the Canvas `captureStream` during replay with
+  `MediaRecorder` (MP4 where the browser records it, otherwise WebM; no conversion step, FFmpeg was removed). Output only; does not affect
   snapshot state.
 
 **Rule:** Generate depends ONLY on snapshots. No legacy state influences replay.

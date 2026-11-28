@@ -55,6 +55,8 @@ export interface HistoryItem {
   status?: 'submitted' | 'approved' | 'needs_revision';
   /** Comments, pictures and videos can be deleted from the timeline (their id in player_timeline_items). */
   deletableId?: string;
+  /** A saved report's entry id (player_entries.id): lets the feed link to the report page. */
+  entryId?: string;
 }
 
 export interface HistoryFilter {
@@ -121,7 +123,7 @@ export function matches(it: HistoryItem, f: HistoryFilter): boolean {
   return true;
 }
 
-/** Which sections a share link may see in the history (reports are never sent through a link). */
+/** Which sections a share link may see in the history (a link gets match reports only, with the Technical section; see historySources). */
 export function sectionsForLink(perms: SharePermissions): HistorySection[] {
   return HISTORY_SECTIONS.filter((s) => perms.see[s]);
 }
@@ -168,7 +170,7 @@ export function itemFromReport(r: { id: string; category: string | null; folder_
   return {
     key: `e-${r.id}`, type: 'report', section: 'technical', date: day(r.created_at), created_at: isoMs(r.created_at),
     title: `${r.category === 'match' ? 'Match' : 'Technical'} report${r.folder_label ? `: ${r.folder_label}` : ''}`,
-    body: text, imageUrl: image?.url, imageFallbackUrl: image?.fallbackUrl, author: 'coach',
+    body: text, imageUrl: image?.url, imageFallbackUrl: image?.fallbackUrl, author: 'coach', entryId: r.id,
   };
 }
 

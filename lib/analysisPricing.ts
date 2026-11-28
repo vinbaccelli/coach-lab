@@ -24,6 +24,10 @@ export const TERMS: { id: Term; label: string; months: number; discountPct: numb
   { id: 'prepaid12', label: '12 months paid in advance', months: 12, discountPct: 20, payUpFront: true },
 ];
 
+/** Shown to the client under the "Monthly, 12 months" choice (the discount depends on keeping the plan; the payment link renews). */
+export const MONTHLY_TERM_NOTICE =
+  'This is a monthly payment that renews automatically, also after the 12 months, until you cancel it. The discount is for the 12-month plan: if you cancel before the 12 months are up, the discount no longer applies.';
+
 export interface AnalysisOffer {
   id: string;
   /** e.g. "Quick analysis", "In-depth analysis". */
