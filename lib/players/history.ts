@@ -123,7 +123,7 @@ export function matches(it: HistoryItem, f: HistoryFilter): boolean {
   return true;
 }
 
-/** Which sections a share link may see in the history (reports are never sent through a link). */
+/** Which sections a share link may see in the history (a link gets match reports only, with the Technical section; see historySources). */
 export function sectionsForLink(perms: SharePermissions): HistorySection[] {
   return HISTORY_SECTIONS.filter((s) => perms.see[s]);
 }
